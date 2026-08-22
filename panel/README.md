@@ -5,10 +5,10 @@ Open-source VPN panel for Ubuntu/Debian — SSH, V2Ray, Xray, OpenVPN, Stunnel, 
 ## Install
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/Chechimk/thomascloud/main/panel/install.sh)
+rm -rf /root/install.sh; wget --no-cache -O /root/install.sh https://raw.githubusercontent.com/Chechimk/THOMAS2/main/panel/install.sh; chmod +x /root/install.sh; bash /root/install.sh
 ```
 
-> Requires root on Ubuntu 20.04 / 22.04 / Debian 10 / 11.
+> Requires root on Ubuntu 20.04 / 22.04 / 24.04 / Debian 10 / 11.
 
 ## Usage
 
