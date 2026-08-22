@@ -79,6 +79,9 @@ cp    "$SCRIPT_DIR/menu"    "$PANEL_DIR/menu"
 cp    "$SCRIPT_DIR/bashrc"  "$PANEL_DIR/bashrc"
 cp    "$SCRIPT_DIR/isRoot"  "$PANEL_DIR/isRoot"
 
+# Keep a full git repo in panel dir for update-panel to work
+cp -r "$TMP_DIR/repo/.git" "$PANEL_DIR/.git"
+
 chmod +x "$PANEL_DIR/menu"
 chmod +x "$LIB_DIR/common.sh"
 find "$SBIN_DIR" -type f -exec chmod +x {} \;
@@ -86,6 +89,19 @@ find "$SBIN_DIR" -type f -exec chmod +x {} \;
 # ── Shell integration ────────────────────────────────────────────
 grep -qF "source /etc/panel/bashrc" /root/.bashrc \
     || echo "source /etc/panel/bashrc" >> /root/.bashrc
+
+# Install system-wide commands so they work immediately without sourcing bashrc
+ln -sf "$PANEL_DIR/menu"            /usr/local/bin/menu
+ln -sf "$SBIN_DIR/onlineUser"       /usr/local/bin/monitor
+ln -sf "$SBIN_DIR/apiMenu"          /usr/local/bin/api
+ln -sf "$SBIN_DIR/bottelegram"      /usr/local/bin/tgbot
+ln -sf "$SBIN_DIR/botWhatsapp"      /usr/local/bin/wsbot
+
+cat > /usr/local/bin/update-panel <<'EOF'
+#!/bin/bash
+git -C /etc/panel pull
+EOF
+chmod +x /usr/local/bin/update-panel
 
 # ── Auto-update service ──────────────────────────────────────────
 cat > /etc/systemd/system/update-panel.service <<EOF
@@ -107,6 +123,10 @@ systemctl enable update-panel &>/dev/null
 echo ""
 echo -e "${CYAN}$(line)${RESET}"
 ok "Panel installed successfully!"
-info "Type ${BOLD}menu${RESET} to start the panel."
-info "Type ${BOLD}update-panel${RESET} to update."
+echo ""
+info "Commands available immediately:"
+echo -e "  ${BOLD}menu${RESET}          — open the panel"
+echo -e "  ${BOLD}monitor${RESET}       — view online users"
+echo -e "  ${BOLD}update-panel${RESET}  — update to latest version"
 echo -e "${CYAN}$(line)${RESET}"
+echo ""
