@@ -1,0 +1,96 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+UDP_BIN="/usr/local/bin/udp-custom"
+UDP_SVC="udp-custom"
+UDP_CONF="/etc/udp-custom.conf"
+
+is_installed_udp() { [[ -f "$UDP_BIN" ]]; }
+
+install_udp() {
+    header "UDP-CUSTOM INSTALLER"
+    get_input "UDP listen port" udp_port
+    port_in_use "$udp_port" && { err "Port $udp_port is in use!" ; press_enter ; return; }
+    get_input "IPTables range (e.g. 1:65535)" ipt_range
+
+    info "Downloading udp-custom..."
+    curl -Lo "$UDP_BIN" "https://github.com/bepass-org/udp-custom/releases/latest/download/udp-custom-linux-amd64" \
+        || { err "Failed to download binary." ; press_enter ; return; }
+    chmod +x "$UDP_BIN"
+
+    echo -e "UDP_PORT=${udp_port}\nIPT_RANGE=${ipt_range}" > "$UDP_CONF"
+
+    cat > "/etc/systemd/system/${UDP_SVC}.service" <<EOF
+[Unit]
+Description=UDP Custom Tunnel
+After=network.target
+
+[Service]
+EnvironmentFile=${UDP_CONF}
+ExecStart=${UDP_BIN} --port \${UDP_PORT}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    iptables -t nat -A PREROUTING -p udp --dport "$ipt_range" -j REDIRECT --to-port "$udp_port"
+    systemctl daemon-reload
+    systemctl enable "$UDP_SVC" --now && ok "UDP-Custom installed on port $udp_port." || err "Failed."
+    press_enter
+}
+
+modify_port() {
+    get_input "New UDP port" new_port
+    port_in_use "$new_port" && { err "Port in use!" ; press_enter ; return; }
+    sed -i "s/^UDP_PORT=.*/UDP_PORT=${new_port}/" "$UDP_CONF"
+    systemctl restart "$UDP_SVC" && ok "Port updated to $new_port." || err "Failed."
+    press_enter
+}
+
+while true; do
+    header "UDP-CUSTOM MANAGER"
+    if is_installed_udp; then
+        local_port=$(grep UDP_PORT "$UDP_CONF" 2>/dev/null | cut -d= -f2)
+        ipt=$(grep IPT_RANGE "$UDP_CONF" 2>/dev/null | cut -d= -f2)
+        printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $UDP_SVC)"
+        printf "  ${DIM}UDP PORT: ${RESET}${WHITE}%s${RESET}   ${DIM}IPTABLES: ${RESET}${WHITE}%s${RESET}\n" "$local_port" "$ipt"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Modify Port"
+        echo -e "  ${CYAN}[2]${RESET}  Modify IPTables Range"
+        echo -e "  ${CYAN}[3]${RESET}  Service Status"
+        echo -e "  ${CYAN}[4]${RESET}  Restart Service"
+        echo -e "  ${CYAN}[5]${RESET}  Start / Stop"
+        echo -e "  ${CYAN}[6]${RESET}  Real-Time Log"
+        echo -e "  ${CYAN}[7]${RESET}  Reinstall"
+        echo -e "  ${RED}[8]${RESET}  Uninstall"
+    else
+        echo -e "  ${YELLOW}UDP-Custom is not installed.${RESET}"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Install UDP-Custom"
+    fi
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) is_installed_udp && modify_port || install_udp ;;
+        2) get_input "New IPTables range" r
+           sed -i "s/^IPT_RANGE=.*/IPT_RANGE=${r}/" "$UDP_CONF"
+           systemctl restart "$UDP_SVC" && ok "IPTables range updated." ; press_enter ;;
+        3) systemctl status "$UDP_SVC" --no-pager ; press_enter ;;
+        4) systemctl restart "$UDP_SVC" && ok "Restarted." ; press_enter ;;
+        5) if systemctl is-active --quiet "$UDP_SVC"; then
+               confirm "Stop?" && systemctl stop "$UDP_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$UDP_SVC" && ok "Started."
+           fi ; press_enter ;;
+        6) journalctl -fu "$UDP_SVC" ;;
+        7) systemctl disable --now "$UDP_SVC" &>/dev/null ; rm -f "$UDP_BIN" ; install_udp ;;
+        8) confirm "Uninstall UDP-Custom?" && systemctl disable --now "$UDP_SVC" &>/dev/null \
+               && rm -f "$UDP_BIN" "$UDP_CONF" "/etc/systemd/system/${UDP_SVC}.service" \
+               && systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

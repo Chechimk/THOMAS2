@@ -1,0 +1,168 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+CONF="/etc/openvpn/server.conf"
+EASY_RSA="/etc/openvpn/easy-rsa"
+CLIENT_CONF="/root/client.ovpn"
+
+is_installed_ovpn() { [[ -f "$CONF" ]]; }
+
+check_tun() { [[ -e /dev/net/tun ]] || { err "TUN module not found. Enable it in your VPS control panel." ; return 1; }; }
+
+install_openvpn() {
+    header "OPENVPN INSTALLER"
+    check_tun || { press_enter ; return; }
+    get_input "Port" port
+    port_in_use "$port" && { err "Port $port is in use!" ; press_enter ; return; }
+
+    echo -e "  Traffic type:\n  ${CYAN}[1]${RESET} UDP  ${CYAN}[2]${RESET} TCP"
+    read -rp "  Choice: " ttype
+    [[ "$ttype" == "2" ]] && proto="tcp" || proto="udp"
+
+    echo -e "  Encryption:\n  ${CYAN}[1]${RESET} AES-128-GCM  ${CYAN}[2]${RESET} AES-256-GCM"
+    read -rp "  Choice: " enc
+    [[ "$enc" == "2" ]] && cipher="AES-256-GCM" || cipher="AES-128-GCM"
+
+    apt-get install -y openvpn easy-rsa || { err "Failed to install packages." ; press_enter ; return; }
+
+    make-cadir "$EASY_RSA"
+    cd "$EASY_RSA" || return
+    ./easyrsa init-pki
+    ./easyrsa --batch build-ca nopass
+    ./easyrsa gen-dh
+    ./easyrsa build-server-full server nopass
+    ./easyrsa build-client-full client1 nopass
+    openvpn --genkey secret /etc/openvpn/ta.key
+
+    cat > "$CONF" <<EOF
+port $port
+proto $proto
+dev tun
+ca $EASY_RSA/pki/ca.crt
+cert $EASY_RSA/pki/issued/server.crt
+key $EASY_RSA/pki/private/server.key
+dh $EASY_RSA/pki/dh.pem
+tls-auth /etc/openvpn/ta.key 0
+cipher $cipher
+server 10.8.0.0 255.255.255.0
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS 8.8.8.8"
+keepalive 10 120
+persist-key
+persist-tun
+status /var/log/openvpn-status.log
+verb 3
+EOF
+
+    systemctl enable openvpn@server --now
+    # Enable IP forwarding
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+    sysctl -p &>/dev/null
+
+    _generate_client_ovpn
+    ok "OpenVPN installed on port $port ($proto)."
+    press_enter
+}
+
+_generate_client_ovpn() {
+    local server_ip; server_ip=$(get_ip)
+    local port; port=$(grep "^port" "$CONF" | awk '{print $2}')
+    local proto; proto=$(grep "^proto" "$CONF" | awk '{print $2}')
+    local cipher; cipher=$(grep "^cipher" "$CONF" | awk '{print $2}')
+
+    cat > "$CLIENT_CONF" <<EOF
+client
+dev tun
+proto $proto
+remote $server_ip $port
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+cipher $cipher
+verb 3
+<ca>
+$(cat "$EASY_RSA/pki/ca.crt")
+</ca>
+<cert>
+$(cat "$EASY_RSA/pki/issued/client1.crt")
+</cert>
+<key>
+$(cat "$EASY_RSA/pki/private/client1.key")
+</key>
+<tls-auth>
+$(cat /etc/openvpn/ta.key)
+</tls-auth>
+key-direction 1
+EOF
+}
+
+view_client() {
+    header "OVPN CLIENT"
+    info "Copy and save to a .ovpn file:"
+    echo -e "${YELLOW}$(line2)${RESET}"
+    cat "$CLIENT_CONF" 2>/dev/null || err "Client config not found."
+    echo -e "${YELLOW}$(line2)${RESET}"
+    press_enter
+}
+
+reconfigure_rsa() {
+    header "RECONFIGURE RSA KEYS"
+    confirm "This will regenerate all RSA keys. Continue?" || return
+    cd "$EASY_RSA" || return
+    ./easyrsa gen-dh
+    ./easyrsa build-server-full server nopass
+    ./easyrsa build-client-full client1 nopass
+    _generate_client_ovpn
+    systemctl restart openvpn@server && ok "RSA keys regenerated."
+    press_enter
+}
+
+while true; do
+    header "OPENVPN ADMINISTRATOR"
+    if is_installed_ovpn; then
+        printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status openvpn@server)"
+        printf "  ${DIM}PORT: ${RESET}${WHITE}%s/%s${RESET}\n" \
+            "$(grep '^port' "$CONF" 2>/dev/null | awk '{print $2}')" \
+            "$(grep '^proto' "$CONF" 2>/dev/null | awk '{print $2}')"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  View OVPN Client"
+        echo -e "  ${CYAN}[2]${RESET}  Reconfigure Client OVPN"
+        echo -e "  ${CYAN}[3]${RESET}  Reconfigure RSA Keys"
+        echo -e "  ${CYAN}[4]${RESET}  Edit Client Config (nano)"
+        echo -e "  ${CYAN}[5]${RESET}  Edit Server Config (nano)"
+        echo -e "  ${CYAN}[6]${RESET}  Service Status"
+        echo -e "  ${CYAN}[7]${RESET}  Restart Service"
+        echo -e "  ${CYAN}[8]${RESET}  Start / Stop Service"
+        echo -e "  ${CYAN}[9]${RESET}  Real-Time Log"
+        echo -e "  ${CYAN}[10]${RESET} Reconfigure OpenVPN"
+        echo -e "  ${RED}[11]${RESET} Uninstall OpenVPN"
+    else
+        echo -e "  ${YELLOW}OpenVPN is not installed.${RESET}"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Install OpenVPN"
+    fi
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1)  is_installed_ovpn && view_client || install_openvpn ;;
+        2)  _generate_client_ovpn && ok "Client regenerated." ; press_enter ;;
+        3)  reconfigure_rsa ;;
+        4)  nano "$CLIENT_CONF" ;;
+        5)  nano "$CONF" ;;
+        6)  systemctl status openvpn@server --no-pager ; press_enter ;;
+        7)  systemctl restart openvpn@server && ok "Restarted." ; press_enter ;;
+        8)  if systemctl is-active --quiet openvpn@server; then
+                confirm "Stop OpenVPN?" && systemctl stop openvpn@server && ok "Stopped."
+            else
+                confirm "Start OpenVPN?" && systemctl start openvpn@server && ok "Started."
+            fi ; press_enter ;;
+        9)  journalctl -fu openvpn@server ;;
+        10) confirm "Reconfigure? All existing config will be replaced." && install_openvpn ;;
+        11) confirm "Uninstall OpenVPN?" && apt-get purge -y openvpn && rm -rf "$EASY_RSA" && ok "Removed." ; press_enter ;;
+        0)  break ;;
+    esac
+done

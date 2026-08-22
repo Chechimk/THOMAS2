@@ -1,0 +1,23 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "ONLINE USERS"
+    printf "  ${BOLD}%-18s %-16s %-20s${RESET}\n" "USER" "IP" "LOGIN TIME"
+    echo -e "${YELLOW}$(line2)${RESET}"
+    who | awk '{printf "  %-18s %-16s %-20s\n", $1, $5, $3" "$4}'
+    echo ""
+    printf "  ${DIM}Total sessions: ${RESET}${WHITE}%s${RESET}\n" "$(who | wc -l)"
+    echo -e "${CYAN}$(line)${RESET}"
+    echo -e "  ${CYAN}[r]${RESET} Refresh  ${CYAN}[k]${RESET} Kill session  ${YELLOW}[0]${RESET} Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        r|R) continue ;;
+        k|K) get_input "TTY to kill (e.g. pts/1)" tty
+             pkill -t "$tty" && ok "Session $tty terminated." || err "Failed."
+             press_enter ;;
+        0) break ;;
+    esac
+done

@@ -1,0 +1,53 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+LE="/root/.acme.sh/acme.sh"
+
+install_acme() {
+    curl https://get.acme.sh | sh -s email="admin@localhost"
+    ok "acme.sh installed." ; press_enter
+}
+
+issue_cert() {
+    [[ ! -f "$LE" ]] && { err "acme.sh not installed. Install it first." ; press_enter ; return; }
+    get_input "Domain" domain
+    "$LE" --issue -d "$domain" --standalone --httpserver 80 \
+        && ok "Certificate issued for $domain." || err "Failed. Ensure port 80 is open."
+    press_enter
+}
+
+renew_cert() {
+    [[ ! -f "$LE" ]] && { err "acme.sh not installed." ; press_enter ; return; }
+    get_input "Domain" domain
+    "$LE" --renew -d "$domain" && ok "Renewed." || err "Failed."
+    press_enter
+}
+
+list_certs() {
+    header "SSL CERTIFICATES"
+    if [[ -d /root/.acme.sh ]]; then
+        ls /root/.acme.sh/ | grep -v "^account" | grep -v "^ca" | grep -v "\.sh$" | nl -w2 -s') '
+    else
+        warn "No certificates found."
+    fi
+    press_enter
+}
+
+while true; do
+    header "SSL CERTIFICATE MANAGER"
+    echo -e "  ${CYAN}[1]${RESET}  Issue New Certificate"
+    echo -e "  ${CYAN}[2]${RESET}  Renew Certificate"
+    echo -e "  ${CYAN}[3]${RESET}  List Certificates"
+    echo -e "  ${CYAN}[4]${RESET}  Install acme.sh"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) issue_cert ;;
+        2) renew_cert ;;
+        3) list_certs ;;
+        4) install_acme ;;
+        0) break ;;
+    esac
+done

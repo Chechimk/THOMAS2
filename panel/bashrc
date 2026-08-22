@@ -1,0 +1,34 @@
+if ! loginctl show-user root 2>/dev/null | grep -q '^Linger=yes'; then
+    loginctl enable-linger root 2>/dev/null || true
+fi
+
+if [[ ! -d /run/user/0 ]]; then
+    mkdir -p /run/user/0
+    chmod 700 /run/user/0
+fi
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+
+[[ -e /etc/panel/reseller ]] && msj="$(cat /etc/panel/reseller)" || msj="@Panel"
+
+clear
+echo -e "\e[36m════════════════════════════════════════════════════════════\e[0m"
+echo -e "\e[1m\e[97m           VPN PANEL MANAGER — RESELLER: $msj\e[0m"
+echo -e "\e[36m════════════════════════════════════════════════════════════\e[0m"
+echo -e "  Type \e[1mmenu\e[0m to open the panel"
+echo -e "  Type \e[1mmonitor\e[0m to view online users"
+echo ""
+
+alias menu='bash /etc/panel/menu'
+alias update-panel='git -C /etc/panel pull'
+alias monitor='bash /etc/panel/sbin/onlineUser'
+alias api='bash /etc/panel/sbin/apiMenu'
+alias tgbot='bash /etc/panel/sbin/bottelegram'
+alias wsbot='bash /etc/panel/sbin/botWhatsapp'
+
+[[ -f /root/.acme.sh/acme.sh ]] && {
+    export LE_WORKING_DIR="/root/.acme.sh"
+    alias acme.sh="/root/.acme.sh/acme.sh"
+}
+
+[[ -f /etc/panel/isRoot ]] && bash /etc/panel/isRoot

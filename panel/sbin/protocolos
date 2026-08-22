@@ -1,0 +1,38 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+# Protocol sub-menu — mirrors ADMRufu2.0's protocolos structure
+while true; do
+    header "PROTOCOL MANAGER"
+    echo -e "  ${CYAN}[1]${RESET}  SSH Manager"
+    echo -e "  ${CYAN}[2]${RESET}  V2Ray / Xray Manager"
+    echo -e "  ${CYAN}[3]${RESET}  OpenVPN Manager"
+    echo -e "  ${CYAN}[4]${RESET}  Stunnel (SSL Tunnel)"
+    echo -e "  ${CYAN}[5]${RESET}  WS-ePro (WebSocket Proxy)"
+    echo -e "  ${CYAN}[6]${RESET}  UDP-Custom"
+    echo -e "  ${CYAN}[7]${RESET}  SlowDNS"
+    echo -e "  ${CYAN}[8]${RESET}  BadVPN (UDP Gateway)"
+    echo -e "  ${CYAN}[9]${RESET}  Squid Proxy"
+    echo -e "  ${CYAN}[10]${RESET} Hysteria UDP"
+    echo -e "  ${CYAN}[11]${RESET} WireGuard"
+    echo -e "  ${CYAN}[12]${RESET} Dropbear SSH"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1)  bash "$SBIN_DIR/sshManager" ;;
+        2)  bash "$SBIN_DIR/v2rayManager" ;;
+        3)  bash "$SBIN_DIR/openVPN" ;;
+        4)  bash "$SBIN_DIR/Stunnel" ;;
+        5)  bash "$SBIN_DIR/wsEpro" ;;
+        6)  bash "$SBIN_DIR/udp-custom" ;;
+        7)  bash "$SBIN_DIR/Slowdns" ;;
+        8)  bash "$SBIN_DIR/badvpn" ;;
+        9)  bash "$SBIN_DIR/Squid" ;;
+        10) bash "$SBIN_DIR/udp-hysteria" ;;
+        11) bash "$SBIN_DIR/WgAdmin" ;;
+        12) bash "$SBIN_DIR/dropBear" ;;
+        0)  break ;;
+    esac
+done

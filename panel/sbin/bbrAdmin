@@ -1,0 +1,30 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "BBR TCP ADMIN"
+    current=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+    printf "  ${DIM}Current: ${RESET}${WHITE}%s${RESET}\n" "$current"
+    echo -e "${CYAN}$(line)${RESET}"
+    echo -e "  ${CYAN}[1]${RESET}  Enable BBR"
+    echo -e "  ${CYAN}[2]${RESET}  Disable BBR (reset to cubic)"
+    echo -e "  ${CYAN}[3]${RESET}  View TCP settings"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) modprobe tcp_bbr 2>/dev/null
+           echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
+           echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+           echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+           sysctl -p &>/dev/null
+           ok "BBR enabled." ; press_enter ;;
+        2) sed -i '/tcp_congestion_control=bbr/d; /default_qdisc=fq/d' /etc/sysctl.conf
+           sysctl -w net.ipv4.tcp_congestion_control=cubic &>/dev/null
+           ok "Reverted to cubic." ; press_enter ;;
+        3) sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc net.ipv4.tcp_available_congestion_control
+           press_enter ;;
+        0) break ;;
+    esac
+done

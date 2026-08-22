@@ -1,0 +1,82 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+WS_BIN="/usr/local/bin/ws-epro"
+WS_SVC="ws-epro"
+
+is_installed_ws() { [[ -f "$WS_BIN" ]]; }
+
+install_ws() {
+    header "WS-EPRO INSTALLER"
+    get_input "WebSocket listen port" ws_port
+    port_in_use "$ws_port" && { err "Port $ws_port is in use!" ; press_enter ; return; }
+    get_input "Redirect traffic to port" redir_port
+
+    info "Downloading ws-epro..."
+    curl -Lo "$WS_BIN" "https://github.com/FahmaFarhat/ws-epro/releases/latest/download/ws-epro-linux-amd64" \
+        || { err "Failed to download ws-epro binary." ; press_enter ; return; }
+    chmod +x "$WS_BIN"
+
+    cat > "/etc/systemd/system/${WS_SVC}.service" <<EOF
+[Unit]
+Description=WS-ePro WebSocket Proxy
+After=network.target
+
+[Service]
+ExecStart=${WS_BIN} --port ${ws_port} --forward 127.0.0.1:${redir_port}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "$WS_SVC" --now && ok "WS-ePro installed on port $ws_port → $redir_port." \
+        || err "Failed to start service."
+    press_enter
+}
+
+uninstall_ws() {
+    confirm "Uninstall WS-ePro?" || return
+    systemctl disable --now "$WS_SVC" &>/dev/null
+    rm -f "$WS_BIN" "/etc/systemd/system/${WS_SVC}.service"
+    systemctl daemon-reload
+    ok "WS-ePro removed."
+    press_enter
+}
+
+while true; do
+    header "WS-EPRO ADMINISTRATOR"
+    if is_installed_ws; then
+        printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $WS_SVC)"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Service Status"
+        echo -e "  ${CYAN}[2]${RESET}  Restart Service"
+        echo -e "  ${CYAN}[3]${RESET}  Start / Stop Service"
+        echo -e "  ${CYAN}[4]${RESET}  Real-Time Log"
+        echo -e "  ${CYAN}[5]${RESET}  Reinstall"
+        echo -e "  ${RED}[6]${RESET}  Uninstall"
+    else
+        echo -e "  ${YELLOW}WS-ePro is not installed.${RESET}"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Install WS-ePro"
+    fi
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) is_installed_ws && { systemctl status "$WS_SVC" --no-pager ; press_enter; } || install_ws ;;
+        2) systemctl restart "$WS_SVC" && ok "Restarted." ; press_enter ;;
+        3) if systemctl is-active --quiet "$WS_SVC"; then
+               confirm "Stop WS-ePro?" && systemctl stop "$WS_SVC" && ok "Stopped."
+           else
+               confirm "Start WS-ePro?" && systemctl start "$WS_SVC" && ok "Started."
+           fi ; press_enter ;;
+        4) journalctl -fu "$WS_SVC" ;;
+        5) uninstall_ws ; install_ws ;;
+        6) uninstall_ws ;;
+        0) break ;;
+    esac
+done

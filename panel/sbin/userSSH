@@ -1,0 +1,47 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+header "SSH USER LIST"
+printf "  ${BOLD}%-18s %-12s %-12s %-10s${RESET}\n" "USER" "EXPIRES" "STATUS" "CONNECTIONS"
+echo -e "${YELLOW}$(line2)${RESET}"
+
+awk -F: '$3>=1000 && $7!="/usr/sbin/nologin" && $7!="/bin/false" {print $1}' /etc/passwd | \
+while read -r user; do
+    exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
+    locked=$(passwd -S "$user" 2>/dev/null | awk '{print $2}')
+    conns=$(who | grep -c "^$user " 2>/dev/null || echo 0)
+
+    if [[ "$locked" == "L" ]]; then
+        status="${RED}BLOCKED${RESET}"
+    elif [[ "$exp" == "never" || $(date -d "$exp" +%s 2>/dev/null) -gt $(date +%s) ]]; then
+        status="${GREEN}ACTIVE${RESET}"
+    else
+        status="${YELLOW}EXPIRED${RESET}"
+    fi
+
+    printf "  %-18s %-12s %-22s %-10s\n" "$user" "${exp:-never}" "$status" "$conns"
+done
+
+echo -e "${CYAN}$(line)${RESET}"
+echo -e "  ${CYAN}[1]${RESET} Delete user  ${CYAN}[2]${RESET} Block user  ${CYAN}[3]${RESET} Unblock user"
+echo -e "  ${CYAN}[4]${RESET} Extend expiry  ${YELLOW}[0]${RESET} Back"
+echo -e "${CYAN}$(line)${RESET}"
+read -rp "  Enter an option: " opt
+
+case "$opt" in
+    1) get_input "Username to delete" u
+       confirm "Delete user $u and their home directory?" && \
+           userdel -r "$u" && ok "User $u deleted." || err "Failed."
+       press_enter ;;
+    2) get_input "Username to block" u
+       passwd -l "$u" && ok "User $u blocked." || err "Failed."
+       press_enter ;;
+    3) get_input "Username to unblock" u
+       passwd -u "$u" && ok "User $u unblocked." || err "Failed."
+       press_enter ;;
+    4) get_input "Username" u
+       get_input "Days to extend" days
+       chage -E "$(date -d "+${days} days" +%Y-%m-%d)" "$u" && ok "Extended $days days." || err "Failed."
+       press_enter ;;
+esac

@@ -1,0 +1,121 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+STUNNEL_CONF_DIR="/etc/stunnel"
+SSL_CERT="/etc/stunnel/stunnel.pem"
+
+is_stunnel_installed() { command -v stunnel4 &>/dev/null || command -v stunnel &>/dev/null; }
+
+list_ports() {
+    grep -rh "^accept" "$STUNNEL_CONF_DIR"/*.conf 2>/dev/null | awk '{print $3}' | tr '\n' ' '
+}
+
+install_stunnel() {
+    header "STUNNEL INSTALLER"
+    apt-get install -y stunnel4 || { err "Failed to install stunnel." ; press_enter ; return; }
+
+    # Pick domain/IP for cert
+    local domains; domains=$(ls /etc/letsencrypt/live/ 2>/dev/null | head -5)
+    if [[ -n "$domains" ]]; then
+        info "Certified domains:"; echo "$domains" | nl -w2 -s') '
+        get_input "Select domain number (or 0 for self-signed)" sel
+        if [[ "$sel" =~ ^[1-9] ]]; then
+            local domain; domain=$(echo "$domains" | sed -n "${sel}p")
+            cat "/etc/letsencrypt/live/$domain/fullchain.pem" \
+                "/etc/letsencrypt/live/$domain/privkey.pem" > "$SSL_CERT"
+        else
+            openssl req -new -x509 -days 3650 -nodes \
+                -out "$SSL_CERT" -keyout "$SSL_CERT" \
+                -subj "/CN=$(get_ip)" &>/dev/null
+        fi
+    else
+        openssl req -new -x509 -days 3650 -nodes \
+            -out "$SSL_CERT" -keyout "$SSL_CERT" \
+            -subj "/CN=$(get_ip)" &>/dev/null
+    fi
+    chmod 600 "$SSL_CERT"
+
+    add_port_conf
+    systemctl enable stunnel4 --now && ok "Stunnel installed." || err "Failed to start."
+    press_enter
+}
+
+add_port_conf() {
+    header "ADD STUNNEL PORT"
+    get_input "SSL listen port (for Stunnel)" ssl_port
+    port_in_use "$ssl_port" && { err "Port $ssl_port is in use!" ; press_enter ; return; }
+
+    get_input "Redirect traffic to port" redir_port
+
+    cat > "${STUNNEL_CONF_DIR}/tunnel_${ssl_port}.conf" <<EOF
+[tunnel_${ssl_port}]
+client = no
+accept = ${ssl_port}
+connect = 127.0.0.1:${redir_port}
+cert = ${SSL_CERT}
+EOF
+    systemctl restart stunnel4 && ok "SSL port $ssl_port → $redir_port added." || err "Failed."
+    press_enter
+}
+
+remove_port_conf() {
+    header "REMOVE SSL PORT"
+    local confs; confs=$(ls "${STUNNEL_CONF_DIR}"/tunnel_*.conf 2>/dev/null)
+    [[ -z "$confs" ]] && { warn "No ports configured." ; press_enter ; return; }
+    echo "$confs" | nl -w2 -s') '
+    get_input "Select number to remove" sel
+    local f; f=$(echo "$confs" | sed -n "${sel}p")
+    [[ -z "$f" ]] && { err "Invalid selection." ; press_enter ; return; }
+    confirm "Remove $(basename "$f")?" || return
+    rm -f "$f"
+    systemctl restart stunnel4 && ok "Port removed." || err "Failed."
+    press_enter
+}
+
+while true; do
+    header "STUNNEL ADMINISTRATOR"
+    if is_stunnel_installed; then
+        printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status stunnel4)"
+        printf "  ${DIM}PORTS: ${RESET}${WHITE}%s${RESET}\n" "$(list_ports)"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Add SSL Port"
+        echo -e "  ${CYAN}[2]${RESET}  Remove SSL Port"
+        echo -e "  ${CYAN}[3]${RESET}  Modify Port Settings (nano)"
+        echo -e "  ${CYAN}[4]${RESET}  SSL Certificate Manager"
+        echo -e "  ${CYAN}[5]${RESET}  Service Status"
+        echo -e "  ${CYAN}[6]${RESET}  Start / Stop Service"
+        echo -e "  ${CYAN}[7]${RESET}  Restart Service"
+        echo -e "  ${CYAN}[8]${RESET}  View Log"
+        echo -e "  ${CYAN}[9]${RESET}  Real-Time Log"
+        echo -e "  ${RED}[10]${RESET} Uninstall Stunnel"
+    else
+        echo -e "  ${YELLOW}Stunnel is not installed.${RESET}"
+        echo -e "${CYAN}$(line)${RESET}"
+        echo -e "  ${CYAN}[1]${RESET}  Install Stunnel"
+    fi
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1)  is_stunnel_installed && add_port_conf || install_stunnel ;;
+        2)  remove_port_conf ;;
+        3)  ls "${STUNNEL_CONF_DIR}"/tunnel_*.conf 2>/dev/null | nl -w2 -s') '
+            get_input "Select file number" sel
+            f=$(ls "${STUNNEL_CONF_DIR}"/tunnel_*.conf 2>/dev/null | sed -n "${sel}p")
+            [[ -n "$f" ]] && nano "$f" ;;
+        4)  bash "$SBIN_DIR/sslManager" ;;
+        5)  systemctl status stunnel4 --no-pager ; press_enter ;;
+        6)  if systemctl is-active --quiet stunnel4; then
+                confirm "Stop Stunnel?" && systemctl stop stunnel4 && ok "Stopped."
+            else
+                confirm "Start Stunnel?" && systemctl start stunnel4 && ok "Started."
+            fi ; press_enter ;;
+        7)  systemctl restart stunnel4 && ok "Restarted." ; press_enter ;;
+        8)  cat /var/log/stunnel4/stunnel.log 2>/dev/null | tail -50 ; press_enter ;;
+        9)  journalctl -fu stunnel4 ;;
+        10) confirm "Uninstall Stunnel?" && apt-get purge -y stunnel4 \
+                && rm -f "$SSL_CERT" && ok "Removed." ; press_enter ;;
+        0)  break ;;
+    esac
+done

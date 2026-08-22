@@ -1,0 +1,155 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+ssh_ports() { grep -E "^Port " /etc/ssh/sshd_config | awk '{print $2}' | tr '\n' ' '; }
+
+check_socket() {
+    systemctl is-active --quiet ssh.socket && return 0 || return 1
+}
+
+disable_socket() {
+    warn "Disabling ssh.socket requires a VPS reboot to take effect."
+    warn "Ensure you have an alternate connection method before continuing!"
+    if confirm "Disable the systemd socket?"; then
+        systemctl stop ssh.socket
+        systemctl disable ssh.socket
+        systemctl enable ssh
+        ok "Socket disabled. Reboot to apply." ; press_enter
+    fi
+}
+
+modify_ports() {
+    header "MODIFY SSH PORT"
+    local current; current=$(ssh_ports)
+    info "Current ports: ${current:-none}"
+    echo ""
+    warn "Enter ports separated by spaces (e.g. 22 2222)"
+    get_input "New ports" ports_raw
+    [[ -z "$ports_raw" ]] && { err "No ports entered." ; press_enter ; return; }
+
+    local new_conf=""
+    for p in $ports_raw; do
+        if ! [[ "$p" =~ ^[0-9]+$ ]] || [[ "$p" -lt 1 || "$p" -gt 65535 ]]; then
+            err "Invalid port: $p" ; press_enter ; return
+        fi
+        new_conf+="Port $p\n"
+    done
+
+    # Replace all Port lines in sshd_config
+    sed -i '/^Port /d' /etc/ssh/sshd_config
+    printf "$new_conf" >> /etc/ssh/sshd_config
+
+    if sshd -t &>/dev/null; then
+        systemctl restart ssh && ok "Ports updated to: $ports_raw" || err "Failed to restart SSH."
+    else
+        err "sshd_config syntax error. Reverting..." ; press_enter
+    fi
+    press_enter
+}
+
+toggle_service() {
+    header "START / STOP SSH"
+    if systemctl is-active --quiet ssh; then
+        confirm "SSH is ACTIVE. Stop it?" && systemctl stop ssh && ok "SSH stopped."
+    else
+        confirm "SSH is INACTIVE. Start it?" && systemctl start ssh && ok "SSH started."
+    fi
+    press_enter
+}
+
+restart_service() {
+    systemctl restart ssh && ok "SSH restarted." || err "Failed to restart SSH."
+    press_enter
+}
+
+install_openssh() {
+    header "INSTALL OPENSSH-SERVER"
+    if is_installed openssh-server; then
+        warn "OpenSSH is already installed."
+    else
+        apt-get install -y openssh-server && ok "OpenSSH installed." || err "Installation failed."
+    fi
+    press_enter
+}
+
+uninstall_openssh() {
+    header "UNINSTALL OPENSSH-SERVER"
+    warn "This will remove the SSH server — you may lose access!"
+    if confirm "Are you sure?"; then
+        apt-get purge -y openssh-server && ok "OpenSSH removed." || err "Failed."
+    fi
+    press_enter
+}
+
+configure_banner() {
+    header "CONFIGURE SSH BANNER"
+    info "Current banner file: /etc/issue.net"
+    echo ""
+    echo -e "  ${CYAN}[1]${RESET}  Edit banner (nano)"
+    echo -e "  ${CYAN}[2]${RESET}  Enable banner in sshd_config"
+    echo -e "  ${CYAN}[3]${RESET}  Disable banner"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) nano /etc/issue.net ;;
+        2) grep -q "^Banner" /etc/ssh/sshd_config \
+               && sed -i 's|^Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config \
+               || echo "Banner /etc/issue.net" >> /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Banner enabled." ;;
+        3) sed -i '/^Banner/d' /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Banner disabled." ;;
+    esac
+    press_enter
+}
+
+configure_root_access() {
+    header "SET UP PASSWORD AND ROOT ACCESS"
+    echo -e "  ${CYAN}[1]${RESET}  Change root password"
+    echo -e "  ${CYAN}[2]${RESET}  Enable root login in SSH"
+    echo -e "  ${CYAN}[3]${RESET}  Disable root login in SSH"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) passwd root ;;
+        2) sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+           sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Root login enabled." ;;
+        3) sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Root login disabled." ;;
+    esac
+    press_enter
+}
+
+while true; do
+    header "SSH ADMINISTRATOR"
+    local_ports=$(ssh_ports)
+    printf "  ${DIM}PORTS: ${RESET}${WHITE}%s${RESET}\n" "${local_ports:-none}"
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status ssh)"
+    [[ $(check_socket) ]] && warn "SSH is managed via systemd socket"
+    echo -e "${CYAN}$(line)${RESET}"
+    echo -e "  ${CYAN}[1]${RESET}  Modify SSH Port"
+    echo -e "  ${CYAN}[2]${RESET}  Start / Stop SSH Server"
+    echo -e "  ${CYAN}[3]${RESET}  Restart SSH Server"
+    echo -e "  ${CYAN}[4]${RESET}  Configure SSH Banner"
+    echo -e "  ${CYAN}[5]${RESET}  Root Password & Access"
+    echo -e "  ${CYAN}[6]${RESET}  Install OpenSSH-Server"
+    echo -e "  ${CYAN}[7]${RESET}  Uninstall OpenSSH-Server"
+    [[ $(check_socket) ]] && echo -e "  ${YELLOW}[8]${RESET}  Disable Systemd Socket"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) modify_ports ;;
+        2) toggle_service ;;
+        3) restart_service ;;
+        4) configure_banner ;;
+        5) configure_root_access ;;
+        6) install_openssh ;;
+        7) uninstall_openssh ;;
+        8) check_socket && disable_socket ;;
+        0) break ;;
+    esac
+done

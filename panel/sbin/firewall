@@ -1,0 +1,49 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "FIREWALL — TORRENT / PORT BLOCK"
+    echo -e "  ${CYAN}[1]${RESET}  Block Torrent Traffic"
+    echo -e "  ${CYAN}[2]${RESET}  Unblock Torrent Traffic"
+    echo -e "  ${CYAN}[3]${RESET}  Block a Port"
+    echo -e "  ${CYAN}[4]${RESET}  Unblock a Port"
+    echo -e "  ${CYAN}[5]${RESET}  Block String/Keyword in Traffic"
+    echo -e "  ${CYAN}[6]${RESET}  View Current IPTables Rules"
+    echo -e "  ${CYAN}[7]${RESET}  Flush All Rules (CAUTION)"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) # Block common BitTorrent ports and protocols
+           iptables -A OUTPUT -p tcp --dport 6881:6889 -j DROP
+           iptables -A OUTPUT -p udp --dport 6881:6889 -j DROP
+           iptables -A OUTPUT -m string --algo bm --string "BitTorrent" -j DROP
+           iptables -A OUTPUT -m string --algo bm --string "BitTorrent protocol" -j DROP
+           ok "Torrent traffic blocked." ; press_enter ;;
+        2) iptables -D OUTPUT -p tcp --dport 6881:6889 -j DROP 2>/dev/null
+           iptables -D OUTPUT -p udp --dport 6881:6889 -j DROP 2>/dev/null
+           iptables -D OUTPUT -m string --algo bm --string "BitTorrent" -j DROP 2>/dev/null
+           ok "Torrent block removed." ; press_enter ;;
+        3) get_input "Port to block" port
+           get_input "Direction [in/out/both]" dir
+           case "$dir" in
+               in)   iptables -A INPUT -p tcp --dport "$port" -j DROP ;;
+               out)  iptables -A OUTPUT -p tcp --dport "$port" -j DROP ;;
+               both) iptables -A INPUT -p tcp --dport "$port" -j DROP
+                     iptables -A OUTPUT -p tcp --dport "$port" -j DROP ;;
+           esac
+           ok "Port $port blocked." ; press_enter ;;
+        4) get_input "Port to unblock" port
+           iptables -D INPUT -p tcp --dport "$port" -j DROP 2>/dev/null
+           iptables -D OUTPUT -p tcp --dport "$port" -j DROP 2>/dev/null
+           ok "Port $port unblocked." ; press_enter ;;
+        5) get_input "Keyword to block" kw
+           iptables -A OUTPUT -m string --algo bm --string "$kw" -j DROP
+           ok "Keyword '$kw' blocked." ; press_enter ;;
+        6) iptables -L -n --line-numbers ; press_enter ;;
+        7) warn "This will remove ALL firewall rules!"
+           confirm "Flush all IPTables rules?" && iptables -F && iptables -X && ok "Rules flushed." ; press_enter ;;
+        0) break ;;
+    esac
+done

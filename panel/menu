@@ -1,0 +1,166 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+RESELLER="$( [[ -f /etc/panel/reseller ]] && cat /etc/panel/reseller || echo "@Panel" )"
+
+count_users() {
+    local status="$1"
+    awk -F: '$3>=1000 && $7!="/usr/sbin/nologin" && $7!="/bin/false"' /etc/passwd | \
+    while read -r line; do
+        user=$(echo "$line" | cut -d: -f1)
+        exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
+        case "$status" in
+            active)   [[ "$exp" == "never" || $(date -d "$exp" +%s 2>/dev/null) -gt $(date +%s) ]] && echo "$user" ;;
+            expired)  [[ "$exp" != "never" && $(date -d "$exp" +%s 2>/dev/null) -le $(date +%s) ]] 2>/dev/null && echo "$user" ;;
+            blocked)  passwd -S "$user" 2>/dev/null | awk '{print $2}' | grep -q "L" && echo "$user" ;;
+        esac
+    done | wc -l
+}
+
+draw_stats() {
+    local now; now=$(date "+%Y-%m-%d %H:%M")
+    local active expired blocked total
+    active=$(count_users active); expired=$(count_users expired)
+    blocked=$(count_users blocked)
+    total=$(( active + expired + blocked ))
+
+    local ram_used ram_total disk_used disk_free cores
+    ram_used=$(sys_ram_used); ram_total=$(sys_ram_total)
+    disk_used=$(sys_disk_used); disk_free=$(sys_disk_free)
+    cores=$(sys_cpu_cores)
+
+    echo -e "${CYAN}$(line)${RESET}"
+    printf "${CYAN}${BOLD}%*s${RESET}\n" $(( (WIDTH + 18) / 2 )) "VPN PANEL MANAGER"
+    echo -e "${CYAN}$(line)${RESET}"
+    printf "  ${DIM}%-12s${RESET}${WHITE}%-20s${RESET}  ${DIM}%-8s${RESET}${WHITE}%s${RESET}\n" \
+        "Date:"  "$(date '+%Y-%m-%d')" "Time:" "$(date '+%H:%M:%S')"
+    echo -e "${YELLOW}$(line2)${RESET}"
+    printf "  ${DIM}%-10s${RESET}${WHITE}%-12s${RESET}  ${DIM}%-10s${RESET}${WHITE}%s${RESET}\n" \
+        "RAM:"   "${ram_used}/${ram_total}MB" "Disk Used:" "$disk_used"
+    printf "  ${DIM}%-10s${RESET}${WHITE}%-12s${RESET}  ${DIM}%-10s${RESET}${WHITE}%s${RESET}\n" \
+        "Disk Free:" "$disk_free" "CPU Cores:" "$cores"
+    echo -e "${YELLOW}$(line2)${RESET}"
+    printf "  ${GREEN}%-12s${RESET}${WHITE}%-8s${RESET}  ${RED}%-12s${RESET}${WHITE}%-8s${RESET}\n" \
+        "ACTIVE:"  "$active"  "EXPIRED:" "$expired"
+    printf "  ${YELLOW}%-12s${RESET}${WHITE}%-8s${RESET}  ${CYAN}%-12s${RESET}${WHITE}%s${RESET}\n" \
+        "BLOCKED:" "$blocked" "TOTAL:"   "$total"
+    echo -e "${YELLOW}$(line2)${RESET}"
+    printf "  ${DIM}RESELLER: ${RESET}${BOLD}${WHITE}%s${RESET}\n" "$RESELLER"
+    echo -e "${CYAN}$(line)${RESET}"
+}
+
+show_menu() {
+    draw_stats
+    echo ""
+    echo -e "  ${BOLD}${CYAN}[1]${RESET}  MANAGE ACCOUNTS"
+    echo -e "  ${BOLD}${CYAN}[2]${RESET}  PROTOCOL CONFIGURATION"
+    echo -e "  ${BOLD}${CYAN}[3]${RESET}  EXTRA TOOLS"
+    echo -e "  ${BOLD}${CYAN}[4]${RESET}  SCRIPT CONFIGURATION"
+    echo -e "  ${BOLD}${RED}[5]${RESET}  UNINSTALL PANEL"
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}[r]${RESET}  RESTART VPS"
+    echo -e "  ${BOLD}${YELLOW}[e]${RESET}  EXIT SCRIPT"
+    echo -e "  ${BOLD}${YELLOW}[q]${RESET}  EXIT VPS (logout)"
+    echo ""
+    echo -e "${CYAN}$(line)${RESET}"
+}
+
+accounts_menu() {
+    while true; do
+        header "MANAGE ACCOUNTS"
+        echo -e "  ${CYAN}[1]${RESET}  Add SSH User"
+        echo -e "  ${CYAN}[2]${RESET}  SSH User List"
+        echo -e "  ${CYAN}[3]${RESET}  Online Users"
+        echo -e "  ${CYAN}[4]${RESET}  Connection Checker"
+        echo -e "  ${CYAN}[5]${RESET}  V2Ray User Manager"
+        echo -e "  ${YELLOW}[0]${RESET}  Back"
+        echo -e "${CYAN}$(line)${RESET}"
+        read -rp "  Enter an option: " opt
+        case "$opt" in
+            1) bash "$SBIN_DIR/useradd" ;;
+            2) bash "$SBIN_DIR/userSSH" ;;
+            3) bash "$SBIN_DIR/onlineUser" ;;
+            4) bash "$SBIN_DIR/checkuser" ;;
+            5) bash "$SBIN_DIR/userRay" ;;
+            0) break ;;
+        esac
+    done
+}
+
+extra_tools_menu() {
+    while true; do
+        header "EXTRA TOOLS"
+        echo -e "  ${CYAN}[1]${RESET}  SSL Certificate Manager"
+        echo -e "  ${CYAN}[2]${RESET}  SSH/Dropbear Banner"
+        echo -e "  ${CYAN}[3]${RESET}  Root Password & Access"
+        echo -e "  ${CYAN}[4]${RESET}  Firewall (Torrent/Port Block)"
+        echo -e "  ${CYAN}[5]${RESET}  Fail2Ban Manager"
+        echo -e "  ${CYAN}[6]${RESET}  DDoS Protection"
+        echo -e "  ${CYAN}[7]${RESET}  BBR TCP Admin"
+        echo -e "  ${CYAN}[8]${RESET}  Speed Test"
+        echo -e "  ${CYAN}[9]${RESET}  File Browser"
+        echo -e "  ${CYAN}[10]${RESET} Modify Time Zone"
+        echo -e "  ${YELLOW}[0]${RESET}  Back"
+        echo -e "${CYAN}$(line)${RESET}"
+        read -rp "  Enter an option: " opt
+        case "$opt" in
+            1)  bash "$SBIN_DIR/sslManager" ;;
+            2)  bash "$SBIN_DIR/banner" ;;
+            3)  bash "$SBIN_DIR/ActiveRoot" ;;
+            4)  bash "$SBIN_DIR/firewall" ;;
+            5)  bash "$SBIN_DIR/fail2banManager" ;;
+            6)  bash "$SBIN_DIR/DDosManager" ;;
+            7)  bash "$SBIN_DIR/bbrAdmin" ;;
+            8)  bash "$SBIN_DIR/speedtest" ;;
+            9)  bash "$SBIN_DIR/fileBrowser" ;;
+            10) bash "$SBIN_DIR/timeZone" ;;
+            0)  break ;;
+        esac
+    done
+}
+
+script_config_menu() {
+    while true; do
+        header "SCRIPT CONFIGURATION"
+        echo -e "  ${CYAN}[1]${RESET}  Auto-Start Script"
+        echo -e "  ${CYAN}[2]${RESET}  Update Panel"
+        echo -e "  ${CYAN}[3]${RESET}  Telegram Bot"
+        echo -e "  ${CYAN}[4]${RESET}  WhatsApp Bot"
+        echo -e "  ${CYAN}[5]${RESET}  API Menu"
+        echo -e "  ${YELLOW}[0]${RESET}  Back"
+        echo -e "${CYAN}$(line)${RESET}"
+        read -rp "  Enter an option: " opt
+        case "$opt" in
+            1) bash "$SBIN_DIR/plugScript" ;;
+            2) git -C /etc/panel pull && ok "Panel updated." ; press_enter ;;
+            3) bash "$SBIN_DIR/bottelegram" ;;
+            4) bash "$SBIN_DIR/botWhatsapp" ;;
+            5) bash "$SBIN_DIR/apiMenu" ;;
+            0) break ;;
+        esac
+    done
+}
+
+uninstall_panel() {
+    header "UNINSTALL PANEL"
+    warn "This will remove the panel and all its configurations."
+    if confirm "Are you sure you want to uninstall?"; then
+        bash /etc/panel/install --uninstall
+    fi
+}
+
+while true; do
+    show_menu
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) accounts_menu ;;
+        2) bash "$SBIN_DIR/protocolos" ;;
+        3) extra_tools_menu ;;
+        4) script_config_menu ;;
+        5) uninstall_panel ;;
+        r|R) confirm "Restart VPS now?" && reboot ;;
+        e|E) clear; exit 0 ;;
+        q|Q) confirm "Logout?" && logout || true ;;
+    esac
+done

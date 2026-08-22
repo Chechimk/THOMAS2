@@ -1,0 +1,20 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    err "Direct root login is required."
+    err "Panel may not function correctly!"
+    exit 1
+fi
+
+if [[ -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
+    err "Direct root login is required (not sudo)."
+    err "Panel may not function correctly!"
+    exit 1
+fi
+
+# Ensure systemd user services are running
+for svc in update-panel; do
+    systemctl is-enabled --quiet "$svc" 2>/dev/null || systemctl enable "$svc" &>/dev/null
+    systemctl is-active  --quiet "$svc" 2>/dev/null || systemctl start  "$svc" &>/dev/null
+done

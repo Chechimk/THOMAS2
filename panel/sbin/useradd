@@ -1,0 +1,24 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+header "ADD SSH USER"
+get_input "Username" username
+[[ -z "$username" ]] && { err "Username cannot be empty." ; press_enter ; exit 1; }
+id "$username" &>/dev/null && { err "User $username already exists." ; press_enter ; exit 1; }
+
+get_input "Password" password
+get_input "Expiry days (0 = never)" days
+
+useradd -m -s /bin/bash "$username"
+echo "$username:$password" | chpasswd
+
+if [[ "$days" -gt 0 ]]; then
+    chage -E "$(date -d "+${days} days" +%Y-%m-%d)" "$username"
+    ok "User $username created — expires in $days days."
+else
+    chage -E -1 "$username"
+    ok "User $username created — no expiry."
+fi
+
+press_enter

@@ -1,0 +1,31 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "FAIL2BAN ADMINISTRATOR"
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status fail2ban)"
+    echo -e "${CYAN}$(line)${RESET}"
+    echo -e "  ${CYAN}[1]${RESET}  Install Fail2Ban"
+    echo -e "  ${CYAN}[2]${RESET}  View Banned IPs (SSH jail)"
+    echo -e "  ${CYAN}[3]${RESET}  Unban IP"
+    echo -e "  ${CYAN}[4]${RESET}  Service Status"
+    echo -e "  ${CYAN}[5]${RESET}  Restart Service"
+    echo -e "  ${CYAN}[6]${RESET}  Edit Config (nano)"
+    echo -e "  ${RED}[7]${RESET}  Uninstall Fail2Ban"
+    echo -e "  ${YELLOW}[0]${RESET}  Back"
+    echo -e "${CYAN}$(line)${RESET}"
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) apt-get install -y fail2ban && systemctl enable fail2ban --now \
+               && ok "Fail2Ban installed." || err "Failed." ; press_enter ;;
+        2) fail2ban-client status sshd 2>/dev/null || warn "SSH jail not active." ; press_enter ;;
+        3) get_input "IP to unban" ip
+           fail2ban-client set sshd unbanip "$ip" && ok "$ip unbanned." || err "Failed." ; press_enter ;;
+        4) systemctl status fail2ban --no-pager ; press_enter ;;
+        5) systemctl restart fail2ban && ok "Restarted." ; press_enter ;;
+        6) nano /etc/fail2ban/jail.local ;;
+        7) confirm "Uninstall Fail2Ban?" && apt-get purge -y fail2ban && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done
