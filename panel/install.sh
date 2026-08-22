@@ -59,7 +59,18 @@ apt-get install -y -qq \
 
 # ── Install panel files ─────────────────────────────────────────
 info "Installing panel to $PANEL_DIR..."
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+REPO_URL="https://github.com/Chechimk/THOMAS2.git"
+TMP_DIR=$(mktemp -d)
+
+# When run via bash <(curl ...) BASH_SOURCE[0] is /dev/fd/XX — clone instead
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+if [[ "$SCRIPT_DIR" == /dev/fd* || "$SCRIPT_DIR" == /proc/* || ! -d "$SCRIPT_DIR/lib" ]]; then
+    info "Cloning panel from GitHub..."
+    git clone --depth=1 "$REPO_URL" "$TMP_DIR/repo" \
+        || err "Failed to clone repository. Check network and repo URL."
+    SCRIPT_DIR="$TMP_DIR/repo/panel"
+fi
 
 mkdir -p "$SBIN_DIR" "$LIB_DIR"
 
@@ -72,6 +83,8 @@ cp    "$SCRIPT_DIR/isRoot"  "$PANEL_DIR/isRoot"
 chmod +x "$PANEL_DIR/menu"
 chmod +x "$LIB_DIR/common.sh"
 find "$SBIN_DIR" -type f -exec chmod +x {} \;
+
+rm -rf "$TMP_DIR"
 
 # ── Shell integration ────────────────────────────────────────────
 grep -qF "source /etc/panel/bashrc" /root/.bashrc \
