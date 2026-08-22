@@ -1,40 +1,51 @@
 #!/bin/bash
-# Shared colors, formatting, and utility functions
-
-RED='\e[31m'; GREEN='\e[32m'; YELLOW='\e[33m'; BLUE='\e[34m'
-CYAN='\e[36m'; WHITE='\e[97m'; BOLD='\e[1m'; RESET='\e[0m'
-DIM='\e[2m'; BGREEN='\e[92m'; BRED='\e[91m'; BYELLOW='\e[93m'
+# $'...' syntax makes escape codes work in read -rp prompts
+RED=$'\e[31m'    ; GREEN=$'\e[32m'  ; YELLOW=$'\e[33m' ; BLUE=$'\e[34m'
+CYAN=$'\e[36m'   ; WHITE=$'\e[97m'  ; BOLD=$'\e[1m'    ; RESET=$'\e[0m'
+DIM=$'\e[2m'     ; BGREEN=$'\e[92m' ; BRED=$'\e[91m'   ; BYELLOW=$'\e[93m'
+LRED=$'\e[1;31m' ; LCYAN=$'\e[1;36m'
 
 PANEL_DIR="/etc/panel"
 SBIN_DIR="$PANEL_DIR/sbin"
 LIB_DIR="$PANEL_DIR/lib"
 
-WIDTH=60
+WIDTH=64
 
-line()  { printf '%*s\n' "$WIDTH" '' | tr ' ' '═'; }
-line2() { printf '%*s\n' "$WIDTH" '' | tr ' ' '─'; }
+# ── Border drawing (red box style matching screenshot) ───────────
+line_top() { echo -e "${RED}╔$(printf '═%.0s' $(seq 1 $((WIDTH-2))))╗${RESET}"; }
+line_bot() { echo -e "${RED}╚$(printf '═%.0s' $(seq 1 $((WIDTH-2))))╝${RESET}"; }
+line_mid() { echo -e "${RED}╠$(printf '═%.0s' $(seq 1 $((WIDTH-2))))╣${RESET}"; }
+line_sep() { echo -e "${RED}$(printf '─%.0s' $(seq 1 $WIDTH))${RESET}"; }
+line()     { echo -e "${RED}$(printf '═%.0s' $(seq 1 $WIDTH))${RESET}"; }
+
+_center() {
+    local t="$1" tlen="${#1}"
+    local pad=$(( (WIDTH - 2 - tlen) / 2 ))
+    printf "${RED}║${RESET}%*s${BOLD}${YELLOW}%-${tlen}s${RESET}%*s${RED}║${RESET}\n" \
+        "$pad" "" "$t" "$((WIDTH - 2 - tlen - pad))" ""
+}
 
 header() {
     clear
-    echo -e "${CYAN}$(line)${RESET}"
-    printf "${CYAN}${BOLD}%*s${RESET}\n" $(( (WIDTH + ${#1}) / 2 )) "$1"
-    echo -e "${CYAN}$(line)${RESET}"
+    line_top
+    _center "$1"
+    line_bot
+    echo ""
 }
 
 section() {
-    echo -e "${YELLOW}$(line2)${RESET}"
-    printf "${YELLOW}  %s${RESET}\n" "$1"
-    echo -e "${YELLOW}$(line2)${RESET}"
+    line_sep
 }
 
-ok()    { echo -e "  ${GREEN}[+]${RESET} $1"; }
-err()   { echo -e "  ${RED}[-]${RESET} $1"; }
-warn()  { echo -e "  ${YELLOW}[!]${RESET} $1"; }
-info()  { echo -e "  ${CYAN}[i]${RESET} $1"; }
+ok()    { echo -e "  ${BGREEN}[+]${RESET} ${WHITE}$1${RESET}"; }
+err()   { echo -e "  ${BRED}[-]${RESET} ${WHITE}$1${RESET}" >&2; }
+warn()  { echo -e "  ${BYELLOW}[!]${RESET} ${WHITE}$1${RESET}"; }
+info()  { echo -e "  ${CYAN}[i]${RESET} ${WHITE}$1${RESET}"; }
 
 press_enter() {
-    echo -e "\n${DIM}$(line2)${RESET}"
-    read -rp "  Press enter to continue... " _
+    echo ""
+    line_sep
+    read -rp "  >> Press enter to continue << " _
 }
 
 confirm() {
@@ -48,16 +59,14 @@ get_input() {
     read -rp "  ${CYAN}${prompt}: ${RESET}" "$var_name"
 }
 
-port_in_use() { ss -tlnp | grep -q ":${1} "; }
+port_in_use() { ss -tlnp 2>/dev/null | grep -q ":${1} " || ss -ulnp 2>/dev/null | grep -q ":${1} "; }
 
 is_installed() { command -v "$1" &>/dev/null || dpkg -l "$1" &>/dev/null 2>&1; }
 
 service_status() {
-    if systemctl is-active --quiet "$1"; then
-        echo -e "${GREEN}ACTIVE${RESET}"
-    else
-        echo -e "${RED}INACTIVE${RESET}"
-    fi
+    systemctl is-active --quiet "$1" 2>/dev/null \
+        && echo -e "${BGREEN}[ON]${RESET}" \
+        || echo -e "${BRED}[OFF]${RESET}"
 }
 
 require_root() {

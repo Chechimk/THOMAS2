@@ -5,105 +5,205 @@ require_root
 RESELLER="$( [[ -f /etc/panel/reseller ]] && cat /etc/panel/reseller || echo "@Panel" )"
 
 count_users() {
-    local status="$1"
-    awk -F: '$3>=1000 && $7!="/usr/sbin/nologin" && $7!="/bin/false"' /etc/passwd | \
-    while read -r line; do
-        user=$(echo "$line" | cut -d: -f1)
-        exp=$(chage -l "$user" 2>/dev/null | grep "Account expires" | cut -d: -f2 | xargs)
+    local status="$1" count=0
+    while IFS=: read -r user _ uid _ _ _ shell; do
+        [[ "$uid" -lt 1000 ]] && continue
+        [[ "$shell" == */nologin || "$shell" == */false ]] && continue
+        local exp; exp=$(chage -l "$user" 2>/dev/null | awk -F': ' '/Account expires/{print $2}')
+        local locked; locked=$(passwd -S "$user" 2>/dev/null | awk '{print $2}')
         case "$status" in
-            active)   [[ "$exp" == "never" || $(date -d "$exp" +%s 2>/dev/null) -gt $(date +%s) ]] && echo "$user" ;;
-            expired)  [[ "$exp" != "never" && $(date -d "$exp" +%s 2>/dev/null) -le $(date +%s) ]] 2>/dev/null && echo "$user" ;;
-            blocked)  passwd -S "$user" 2>/dev/null | awk '{print $2}' | grep -q "L" && echo "$user" ;;
+            active)  [[ "$locked" != "L" ]] && { [[ "$exp" == "never" ]] || \
+                         [[ $(date -d "$exp" +%s 2>/dev/null) -gt $(date +%s) ]]; } && (( count++ )) ;;
+            expired) [[ "$exp" != "never" ]] && \
+                         [[ $(date -d "$exp" +%s 2>/dev/null) -le $(date +%s) ]] 2>/dev/null && (( count++ )) ;;
+            blocked) [[ "$locked" == "L" ]] && (( count++ )) ;;
         esac
-    done | wc -l
+    done < /etc/passwd
+    echo "$count"
 }
 
-draw_stats() {
-    local now; now=$(date "+%Y-%m-%d %H:%M")
+draw_header() {
+    local reseller="$RESELLER"
+    local ip; ip=$(get_ip)
+    local os; os=$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")
     local active expired blocked total
     active=$(count_users active); expired=$(count_users expired)
-    blocked=$(count_users blocked)
-    total=$(( active + expired + blocked ))
+    blocked=$(count_users blocked); total=$(( active + expired + blocked ))
 
-    local ram_used ram_total disk_used disk_free cores
-    ram_used=$(sys_ram_used); ram_total=$(sys_ram_total)
-    disk_used=$(sys_disk_used); disk_free=$(sys_disk_free)
-    cores=$(sys_cpu_cores)
-
-    echo -e "${CYAN}$(line)${RESET}"
-    printf "${CYAN}${BOLD}%*s${RESET}\n" $(( (WIDTH + 18) / 2 )) "VPN PANEL MANAGER"
-    echo -e "${CYAN}$(line)${RESET}"
-    printf "  ${DIM}%-12s${RESET}${WHITE}%-20s${RESET}  ${DIM}%-8s${RESET}${WHITE}%s${RESET}\n" \
-        "Date:"  "$(date '+%Y-%m-%d')" "Time:" "$(date '+%H:%M:%S')"
-    echo -e "${YELLOW}$(line2)${RESET}"
-    printf "  ${DIM}%-10s${RESET}${WHITE}%-12s${RESET}  ${DIM}%-10s${RESET}${WHITE}%s${RESET}\n" \
-        "RAM:"   "${ram_used}/${ram_total}MB" "Disk Used:" "$disk_used"
-    printf "  ${DIM}%-10s${RESET}${WHITE}%-12s${RESET}  ${DIM}%-10s${RESET}${WHITE}%s${RESET}\n" \
-        "Disk Free:" "$disk_free" "CPU Cores:" "$cores"
-    echo -e "${YELLOW}$(line2)${RESET}"
-    printf "  ${GREEN}%-12s${RESET}${WHITE}%-8s${RESET}  ${RED}%-12s${RESET}${WHITE}%-8s${RESET}\n" \
-        "ACTIVE:"  "$active"  "EXPIRED:" "$expired"
-    printf "  ${YELLOW}%-12s${RESET}${WHITE}%-8s${RESET}  ${CYAN}%-12s${RESET}${WHITE}%s${RESET}\n" \
-        "BLOCKED:" "$blocked" "TOTAL:"   "$total"
-    echo -e "${YELLOW}$(line2)${RESET}"
-    printf "  ${DIM}RESELLER: ${RESET}${BOLD}${WHITE}%s${RESET}\n" "$RESELLER"
-    echo -e "${CYAN}$(line)${RESET}"
+    clear
+    line_top
+    _center "$reseller"
+    line_mid
+    printf "${RED}║${RESET}  ${CYAN}S.O:${RESET}  ${WHITE}%-22s${RESET}  ${CYAN}Date:${RESET}  ${WHITE}%-14s${RESET}${RED}║${RESET}\n" \
+        "$os" "$(date '+%d-%m-%Y')"
+    printf "${RED}║${RESET}  ${CYAN}IP: ${RESET}  ${WHITE}%-22s${RESET}  ${CYAN}Time:${RESET}  ${WHITE}%-14s${RESET}${RED}║${RESET}\n" \
+        "$ip" "$(date '+%H:%M:%S')"
+    line_mid
+    printf "${RED}║${RESET}  ${YELLOW}%-30s${RESET}  ${YELLOW}%-28s${RESET}${RED}║${RESET}\n" \
+        "──────────── Disk ────────────" "──────────── CPU ────────────"
+    printf "${RED}║${RESET}  ${WHITE}Total: %-10s${RESET}  ${WHITE}Dispo: %-10s${RESET}  ${WHITE}Cores: %-5s${RESET}  ${RED}║${RESET}\n" \
+        "$(sys_disk_total)" "$(sys_disk_free)" "$(sys_cpu_cores)"
+    printf "${RED}║${RESET}  ${WHITE}In Use: %-9s${RESET}  ${WHITE}Free:  %-10s${RESET}  ${WHITE}In Use:%-5s${RESET}  ${RED}║${RESET}\n" \
+        "$(sys_disk_used)" "$(sys_disk_free)" "$(sys_cpu_usage)"
+    line_mid
+    printf "${RED}║${RESET}  ${YELLOW}%-58s${RESET}${RED}║${RESET}\n" \
+        "────────────────────── RAM ──────────────────────────"
+    printf "${RED}║${RESET}  ${WHITE}Total: %-14s${RESET}  ${WHITE}In Use: %-12s${RESET}  ${WHITE}Free: %-5s${RESET}${RED}║${RESET}\n" \
+        "$(sys_ram_total)" "$(sys_ram_used)" "$(sys_ram_free)"
+    printf "${RED}║${RESET}  ${WHITE}Buffer: %-13s${RESET}  ${WHITE}Cache:  %-18s${RESET}${RED}║${RESET}\n" \
+        "$(sys_ram_buffer)" "$(sys_ram_cache)"
+    line_mid
+    printf "${RED}║${RESET}  ${BGREEN}ACTIVE: %-6s${RESET}  ${BRED}EXPIRED: %-6s${RESET}  ${BYELLOW}BLOCKED: %-5s${RESET}  ${WHITE}TOTAL: %-4s${RESET}  ${RED}║${RESET}\n" \
+        "$active" "$expired" "$blocked" "$total"
+    line_bot
 }
 
 show_menu() {
-    draw_stats
+    draw_header
     echo ""
-    echo -e "  ${BOLD}${CYAN}[1]${RESET}  MANAGE ACCOUNTS"
-    echo -e "  ${BOLD}${CYAN}[2]${RESET}  PROTOCOL CONFIGURATION"
-    echo -e "  ${BOLD}${CYAN}[3]${RESET}  EXTRA TOOLS"
-    echo -e "  ${BOLD}${CYAN}[4]${RESET}  SCRIPT CONFIGURATION"
-    echo -e "  ${BOLD}${RED}[5]${RESET}  UNINSTALL PANEL"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${BOLD}${WHITE}MANAGE ACCOUNTS (SSH/DROPBEAR)${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${BOLD}${WHITE}MANAGE ACCOUNTS (V2RAY/XRAY)${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[3]>${RESET}  ${BOLD}${WHITE}PROTOCOL CONFIGURATION${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${BOLD}${WHITE}EXTRA TOOLS${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[5]>${RESET}  ${BOLD}${WHITE}SCRIPT CONFIGURATION${RESET}"
+    line_sep
+    echo -e "  ${BRED}[6]>${RESET}  ${BOLD}${WHITE}[!] UNINSTALL PANEL${RESET}"
+    line_sep
+    printf "  ${BRED}[0] EXIT VPS${RESET}    ${CYAN}[9] EXIT SCRIPT${RESET}    ${YELLOW}[10] RESTART VPS${RESET}\n"
+    line_sep
     echo ""
-    echo -e "  ${BOLD}${YELLOW}[r]${RESET}  RESTART VPS"
-    echo -e "  ${BOLD}${YELLOW}[e]${RESET}  EXIT SCRIPT"
-    echo -e "  ${BOLD}${YELLOW}[q]${RESET}  EXIT VPS (logout)"
+    read -rp "  Enter an Option: " opt
     echo ""
-    echo -e "${CYAN}$(line)${RESET}"
+    case "$opt" in
+        1)  ssh_accounts_menu ;;
+        2)  bash "$SBIN_DIR/v2rayManager" ;;
+        3)  bash "$SBIN_DIR/protocolos" ;;
+        4)  extra_tools_menu ;;
+        5)  script_config_menu ;;
+        6)  uninstall_panel ;;
+        0)  logout 2>/dev/null || exit 0 ;;
+        9)  clear ; exit 0 ;;
+        10) confirm "Restart VPS now?" && reboot ;;
+    esac
 }
 
-accounts_menu() {
+ssh_accounts_menu() {
     while true; do
-        header "MANAGE ACCOUNTS"
-        echo -e "  ${CYAN}[1]${RESET}  Add SSH User"
-        echo -e "  ${CYAN}[2]${RESET}  SSH User List"
-        echo -e "  ${CYAN}[3]${RESET}  Online Users"
-        echo -e "  ${CYAN}[4]${RESET}  Connection Checker"
-        echo -e "  ${CYAN}[5]${RESET}  V2Ray User Manager"
-        echo -e "  ${YELLOW}[0]${RESET}  Back"
-        echo -e "${CYAN}$(line)${RESET}"
-        read -rp "  Enter an option: " opt
+        header "MANAGE ACCOUNTS — SSH / DROPBEAR"
+        line_sep
+        echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}ADD USER${RESET}"
+        echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}DELETE USER${RESET}"
+        echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}RENEW USER${RESET}"
+        echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}EDIT USER${RESET}"
+        echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}BLOCK / UNBLOCK USER${RESET}"
+        line_sep
+        echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}ALL USERS DETAIL${RESET}"
+        echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}ONLINE USERS MONITOR${RESET}"
+        echo -e "  ${CYAN}[8]>${RESET}  ${WHITE}CONNECTION CHECKER${RESET}"
+        line_sep
+        echo -e "  ${CYAN}[9]>${RESET}  ${WHITE}DELETE EXPIRED USERS${RESET}"
+        line_sep
+        echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+        line_sep
+        echo ""
+        read -rp "  Enter an Option: " opt
         case "$opt" in
             1) bash "$SBIN_DIR/useradd" ;;
             2) bash "$SBIN_DIR/userSSH" ;;
-            3) bash "$SBIN_DIR/onlineUser" ;;
-            4) bash "$SBIN_DIR/checkuser" ;;
-            5) bash "$SBIN_DIR/userRay" ;;
+            3) _renew_user ;;
+            4) _edit_user ;;
+            5) _toggle_user ;;
+            6) bash "$SBIN_DIR/userSSH" ;;
+            7) bash "$SBIN_DIR/onlineUser" ;;
+            8) bash "$SBIN_DIR/checkuser" ;;
+            9) _delete_expired ;;
             0) break ;;
         esac
     done
 }
 
+_renew_user() {
+    header "RENEW USER"
+    get_input "Username" u
+    get_input "Days to extend" days
+    [[ ! "$days" =~ ^[0-9]+$ ]] && { err "Invalid days." ; press_enter ; return; }
+    chage -E "$(date -d "+${days} days" +%Y-%m-%d)" "$u" \
+        && ok "User $u renewed for $days days." || err "Failed."
+    press_enter
+}
+
+_edit_user() {
+    header "EDIT USER"
+    get_input "Username" u
+    id "$u" &>/dev/null || { err "User not found." ; press_enter ; return; }
+    get_input "New password (Enter to skip)" pw
+    [[ -n "$pw" ]] && echo "$u:$pw" | chpasswd && ok "Password updated."
+    get_input "New expiry days (Enter to skip)" days
+    [[ "$days" =~ ^[0-9]+$ ]] && chage -E "$(date -d "+${days} days" +%Y-%m-%d)" "$u" \
+        && ok "Expiry updated."
+    press_enter
+}
+
+_toggle_user() {
+    header "BLOCK / UNBLOCK USER"
+    get_input "Username" u
+    local locked; locked=$(passwd -S "$u" 2>/dev/null | awk '{print $2}')
+    if [[ "$locked" == "L" ]]; then
+        passwd -u "$u" && ok "User $u unblocked."
+    else
+        passwd -l "$u" && ok "User $u blocked."
+    fi
+    press_enter
+}
+
+_delete_expired() {
+    header "DELETE EXPIRED USERS"
+    local found=0
+    while IFS=: read -r user _ uid _ _ _ shell; do
+        [[ "$uid" -lt 1000 ]] && continue
+        [[ "$shell" == */nologin || "$shell" == */false ]] && continue
+        local exp; exp=$(chage -l "$user" 2>/dev/null | awk -F': ' '/Account expires/{print $2}')
+        [[ "$exp" == "never" ]] && continue
+        if [[ $(date -d "$exp" +%s 2>/dev/null) -le $(date +%s) ]] 2>/dev/null; then
+            echo -e "  ${BYELLOW}Expired:${RESET} $user (${exp})"
+            found=1
+        fi
+    done < /etc/passwd
+    [[ "$found" -eq 0 ]] && { warn "No expired users found." ; press_enter ; return; }
+    confirm "Delete all expired users?" || { press_enter ; return; }
+    while IFS=: read -r user _ uid _ _ _ shell; do
+        [[ "$uid" -lt 1000 ]] && continue
+        [[ "$shell" == */nologin || "$shell" == */false ]] && continue
+        local exp; exp=$(chage -l "$user" 2>/dev/null | awk -F': ' '/Account expires/{print $2}')
+        [[ "$exp" == "never" ]] && continue
+        [[ $(date -d "$exp" +%s 2>/dev/null) -le $(date +%s) ]] 2>/dev/null && \
+            userdel -r "$user" &>/dev/null && ok "Deleted: $user"
+    done < /etc/passwd
+    press_enter
+}
+
 extra_tools_menu() {
     while true; do
         header "EXTRA TOOLS"
-        echo -e "  ${CYAN}[1]${RESET}  SSL Certificate Manager"
-        echo -e "  ${CYAN}[2]${RESET}  SSH/Dropbear Banner"
-        echo -e "  ${CYAN}[3]${RESET}  Root Password & Access"
-        echo -e "  ${CYAN}[4]${RESET}  Firewall (Torrent/Port Block)"
-        echo -e "  ${CYAN}[5]${RESET}  Fail2Ban Manager"
-        echo -e "  ${CYAN}[6]${RESET}  DDoS Protection"
-        echo -e "  ${CYAN}[7]${RESET}  BBR TCP Admin"
-        echo -e "  ${CYAN}[8]${RESET}  Speed Test"
-        echo -e "  ${CYAN}[9]${RESET}  File Browser"
-        echo -e "  ${CYAN}[10]${RESET} Modify Time Zone"
-        echo -e "  ${YELLOW}[0]${RESET}  Back"
-        echo -e "${CYAN}$(line)${RESET}"
-        read -rp "  Enter an option: " opt
+        line_sep
+        echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}SSL CERTIFICATE MANAGER${RESET}"
+        echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}SSH / DROPBEAR BANNER${RESET}"
+        echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}ROOT PASSWORD AND ACCESS${RESET}"
+        echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}FIREWALL — TORRENT / PORT BLOCK${RESET}"
+        echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}FAIL2BAN MANAGER${RESET}"
+        echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}DDOS PROTECTION${RESET}"
+        echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}BBR TCP ADMIN${RESET}"
+        echo -e "  ${CYAN}[8]>${RESET}  ${WHITE}SPEED TEST${RESET}"
+        echo -e "  ${CYAN}[9]>${RESET}  ${WHITE}FILE BROWSER${RESET}"
+        echo -e "  ${CYAN}[10]>${RESET} ${WHITE}MODIFY TIME ZONE${RESET}"
+        line_sep
+        echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+        line_sep
+        echo ""
+        read -rp "  Enter an Option: " opt
         case "$opt" in
             1)  bash "$SBIN_DIR/sslManager" ;;
             2)  bash "$SBIN_DIR/banner" ;;
@@ -123,30 +223,31 @@ extra_tools_menu() {
 script_config_menu() {
     while true; do
         header "SCRIPT CONFIGURATION"
-        echo -e "  ${CYAN}[1]${RESET}  Auto-Start Script"
-        echo -e "  ${CYAN}[2]${RESET}  Update Panel"
-        echo -e "  ${CYAN}[3]${RESET}  Telegram Bot"
-        echo -e "  ${CYAN}[4]${RESET}  WhatsApp Bot"
-        echo -e "  ${CYAN}[5]${RESET}  API Menu"
-        echo -e "  ${YELLOW}[0]${RESET}  Back"
-        echo -e "${CYAN}$(line)${RESET}"
-        read -rp "  Enter an option: " opt
+        line_sep
+        echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}UPDATE PANEL${RESET}"
+        echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}TELEGRAM BOT${RESET}"
+        echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}WHATSAPP BOT${RESET}"
+        echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}API MENU${RESET}"
+        line_sep
+        echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+        line_sep
+        echo ""
+        read -rp "  Enter an Option: " opt
         case "$opt" in
-            1) bash "$SBIN_DIR/plugScript" ;;
-            2) git -C /etc/panel pull && ok "Panel updated." ; press_enter ;;
-            3) bash "$SBIN_DIR/bottelegram" ;;
-            4) bash "$SBIN_DIR/botWhatsapp" ;;
-            5) bash "$SBIN_DIR/apiMenu" ;;
+            1) update-panel ;;
+            2) bash "$SBIN_DIR/bottelegram" ;;
+            3) bash "$SBIN_DIR/botWhatsapp" ;;
+            4) bash "$SBIN_DIR/apiMenu" ;;
             0) break ;;
         esac
     done
 }
 
 uninstall_panel() {
-    header "UNINSTALL PANEL"
-    warn "This will remove the panel and all its configurations."
+    header "[!] UNINSTALL PANEL"
+    warn "This will permanently remove the panel and all configurations."
     if confirm "Are you sure you want to uninstall?"; then
-        bash /etc/panel/install --uninstall
+        bash /etc/panel/install.sh --uninstall
     fi
 }
 
