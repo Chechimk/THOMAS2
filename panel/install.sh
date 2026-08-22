@@ -53,13 +53,61 @@ read -rp "  Continue with installation? [Y/N]: " ans
 info "Updating packages..."
 apt-get update -qq
 
-info "Installing dependencies..."
-apt-get install -y -qq \
-    git curl wget nano openssl net-tools \
-    iptables dnsutils lsb-release gnupg \
-    software-properties-common python3 \
+info "Installing core dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    git curl wget nano unzip tar \
+    || err "Failed to install base tools."
+
+info "Installing network tools..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    openssl ca-certificates socat \
+    net-tools iproute2 iptables nftables \
+    dnsutils bind9-dnsutils netcat-openbsd \
+    || err "Failed to install network tools."
+
+info "Installing system tools..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    lsb-release gnupg software-properties-common \
+    cron uuid-runtime procps htop \
     libcurl4-openssl-dev libstdc++6 \
-    || err "Failed to install dependencies."
+    || err "Failed to install system tools."
+
+info "Installing Python and pip..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    python3 python3-pip python3-venv \
+    || err "Failed to install Python."
+
+info "Installing SSH tools..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    openssh-server dropbear \
+    || err "Failed to install SSH tools."
+
+info "Installing firewall and security tools..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    fail2ban iptables-persistent \
+    || true  # non-fatal — user can install manually
+
+info "Installing VPN dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    openvpn easy-rsa \
+    || true
+
+info "Installing proxy tools..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    stunnel4 squid \
+    || true
+
+info "Installing WireGuard..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    wireguard wireguard-tools \
+    || true
+
+info "Installing jq for JSON parsing..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq || true
+
+# pip packages needed by some modules
+info "Installing Python packages..."
+pip3 install --quiet requests colorama PySocks 2>/dev/null || true
 
 # ── Clone repo ───────────────────────────────────────────────────
 info "Cloning panel from GitHub..."
@@ -84,6 +132,19 @@ chmod +x "$PANEL_DIR/isRoot"
 find "$SBIN_DIR" -type f -exec chmod +x {} \;
 
 rm -rf "$TMP_DIR"
+
+# ── Verify critical tools ────────────────────────────────────────
+info "Verifying installation..."
+MISSING=()
+for cmd in python3 pip3 curl wget git openssl nano iptables ss; do
+    command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
+done
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+    warn "Some tools could not be verified: ${MISSING[*]}"
+    warn "The panel may have limited functionality."
+else
+    ok "All critical tools verified."
+fi
 
 # ── System-wide commands ─────────────────────────────────────────
 ln -sf "$PANEL_DIR/menu"        /usr/local/bin/menu
