@@ -1,0 +1,310 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+XR_CONF_DIR="/usr/local/etc/xray/conf"
+V2_CONF_DIR="/usr/local/etc/v2ray/conf"
+USER_DB="/etc/panel/xray_users.json"
+SERVER_IP=$(get_ip)
+
+# Initialise user DB if absent
+[[ ! -f "$USER_DB" ]] && echo '[]' > "$USER_DB"
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+_list_inbounds() {
+    local conf_dir="$1"
+    ls "${conf_dir}"/*.json 2>/dev/null
+}
+
+_inbound_port() {
+    python3 -c "import json; d=json.load(open('$1')); print(d['inbounds'][0]['port'])" 2>/dev/null || echo "?"
+}
+
+_inbound_proto() {
+    python3 -c "import json; d=json.load(open('$1')); print(d['inbounds'][0]['protocol'])" 2>/dev/null || echo "?"
+}
+
+_inbound_network() {
+    python3 -c "
+import json
+d = json.load(open('$1'))
+ss = d['inbounds'][0].get('streamSettings', {})
+print(ss.get('network','tcp'))
+" 2>/dev/null || echo "tcp"
+}
+
+_inbound_path() {
+    python3 -c "
+import json
+d = json.load(open('$1'))
+ss = d['inbounds'][0].get('streamSettings', {})
+net = ss.get('network','tcp')
+key = net + 'Settings'
+print(ss.get(key,{}).get('path',''))
+" 2>/dev/null || echo ""
+}
+
+_gen_link() {
+    local conf_file="$1" uuid="$2" name="$3"
+    local proto port network path_val sni security
+
+    proto=$(    python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0]['protocol'])" 2>/dev/null)
+    port=$(     python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0]['port'])" 2>/dev/null)
+    network=$(  python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0].get('streamSettings',{}).get('network','tcp'))" 2>/dev/null)
+    path_val=$( python3 -c "
+import json
+d=json.load(open('$conf_file'))
+ss=d['inbounds'][0].get('streamSettings',{})
+net=ss.get('network','tcp')
+print(ss.get(net+'Settings',{}).get('path',''))
+" 2>/dev/null)
+    security=$( python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0].get('streamSettings',{}).get('security','none'))" 2>/dev/null)
+
+    local host="$SERVER_IP"
+
+    case "$proto" in
+        vless)
+            local flow
+            flow=$(python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0]['settings']['clients'][0].get('flow',''))" 2>/dev/null)
+            local params="encryption=none&type=${network}&security=${security}"
+            [[ -n "$path_val" ]] && params+="&path=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$path_val'))")"
+            [[ -n "$flow" ]]     && params+="&flow=${flow}"
+            echo "vless://${uuid}@${host}:${port}?${params}#${name}"
+            ;;
+        vmess)
+            local json_b64
+            json_b64=$(python3 -c "
+import json, base64
+obj = {'v':'2','ps':'$name','add':'$host','port':'$port',
+       'id':'$uuid','aid':'0','net':'$network',
+       'type':'none','host':'','path':'$path_val','tls':'$security'}
+print(base64.b64encode(json.dumps(obj).encode()).decode())
+")
+            echo "vmess://${json_b64}"
+            ;;
+        trojan)
+            local params="type=${network}&security=${security}"
+            [[ -n "$path_val" ]] && params+="&path=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$path_val'))")"
+            echo "trojan://${uuid}@${host}:${port}?${params}#${name}"
+            ;;
+    esac
+}
+
+_add_client_to_conf() {
+    local conf_file="$1" uuid="$2" flow="$3"
+    export _CONF="$conf_file" _UUID="$uuid" _FLOW="$flow"
+    python3 << 'PYEOF'
+import json, os
+conf = os.environ["_CONF"]
+uuid = os.environ["_UUID"]
+flow = os.environ["_FLOW"]
+d = json.load(open(conf))
+client = {"id": uuid}
+if flow:
+    client["flow"] = flow
+d["inbounds"][0]["settings"]["clients"].append(client)
+with open(conf, "w") as f:
+    json.dump(d, f, indent=2)
+PYEOF
+}
+
+_remove_client_from_conf() {
+    local conf_file="$1" uuid="$2"
+    export _CONF="$conf_file" _UUID="$uuid"
+    python3 << 'PYEOF'
+import json, os
+conf = os.environ["_CONF"]
+uuid = os.environ["_UUID"]
+d = json.load(open(conf))
+clients = d["inbounds"][0]["settings"]["clients"]
+key = "id" if d["inbounds"][0]["protocol"] != "trojan" else "password"
+d["inbounds"][0]["settings"]["clients"] = [c for c in clients if c.get(key) != uuid]
+with open(conf, "w") as f:
+    json.dump(d, f, indent=2)
+PYEOF
+}
+
+# ── Pick inbound ──────────────────────────────────────────────────
+
+pick_inbound() {
+    local -n _ret=$1
+    local all_confs=()
+    for f in $(ls "$XR_CONF_DIR"/*.json 2>/dev/null) $(ls "$V2_CONF_DIR"/*.json 2>/dev/null); do
+        all_confs+=("$f")
+    done
+    [[ ${#all_confs[@]} -eq 0 ]] && { warn "No inbounds configured. Install Xray/V2Ray first." ; return 1; }
+    echo ""
+    local i=1
+    for f in "${all_confs[@]}"; do
+        printf "  ${CYAN}[%d]${RESET}  %s  port=${WHITE}%s${RESET}  proto=${WHITE}%s${RESET}\n" \
+            "$i" "$(basename "$f" .json)" "$(_inbound_port "$f")" "$(_inbound_proto "$f")"
+        (( i++ ))
+    done
+    line_sep
+    read -rp "  Select inbound: " sel
+    _ret="${all_confs[$((sel-1))]}"
+    [[ -z "$_ret" ]] && { err "Invalid selection." ; return 1; }
+}
+
+# ── Main actions ──────────────────────────────────────────────────
+
+add_user() {
+    header "NEW V2RAY/XRAY USER"
+    local conf_file
+    pick_inbound conf_file || { press_enter ; return; }
+
+    local proto; proto=$(_inbound_proto "$conf_file")
+    read -rp "  ${CYAN}Username / label: ${RESET}" uname
+    [[ -z "$uname" ]] && { err "Name required." ; press_enter ; return; }
+
+    local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
+    local flow=""
+    [[ "$proto" == "vless" ]] && {
+        # Check if XTLS Vision is configured
+        flow=$(python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0]['settings']['clients'][0].get('flow',''))" 2>/dev/null)
+    }
+
+    _add_client_to_conf "$conf_file" "$uuid" "$flow"
+
+    # Save to user DB with timestamp
+    python3 -c "
+import json, time
+db = json.load(open('$USER_DB'))
+db.append({'name':'$uname','uuid':'$uuid','conf':'$conf_file','created':int(time.time())})
+json.dump(db, open('$USER_DB','w'), indent=2)
+" 2>/dev/null
+
+    systemctl restart xray &>/dev/null || systemctl restart v2ray &>/dev/null || true
+
+    local link; link=$(_gen_link "$conf_file" "$uuid" "$uname")
+
+    echo ""
+    line
+    ok "User created!"
+    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "Name:"   "$uname"
+    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "UUID:"   "$uuid"
+    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "Port:"   "$(_inbound_port "$conf_file")"
+    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "Proto:"  "$proto"
+    line_sep
+    echo -e "  ${BOLD}${YELLOW}Connection Link:${RESET}"
+    echo -e "  ${WHITE}${link}${RESET}"
+    line
+    press_enter
+}
+
+list_users() {
+    header "USER MANAGER V2RAY AND XRAY"
+    line_sep
+    python3 -c "
+import json, time, os
+try:
+    db = json.load(open('$USER_DB'))
+except:
+    db = []
+if not db:
+    print('  No users found.')
+else:
+    print(f'  {\033[36mName\033[0m:<20} {\033[36mUUID\033[0m:<38} {\033[36mCreated\033[0m}')
+    print('  ' + '-'*70)
+    for i,u in enumerate(db,1):
+        ts = time.strftime('%Y-%m-%d', time.localtime(u.get('created',0)))
+        print(f'  [{i}] {u[\"name\"]:<18} {u[\"uuid\"]:<38} {ts}')
+" 2>/dev/null || warn "Could not read user database."
+    line_sep
+    press_enter
+}
+
+show_link() {
+    header "USER CONNECTION LINK"
+    python3 -c "
+import json
+try:
+    db = json.load(open('$USER_DB'))
+except:
+    db = []
+for i,u in enumerate(db,1):
+    print(f'  [{i}] {u[\"name\"]}')
+" 2>/dev/null
+    [[ ! -s "$USER_DB" ]] || python3 -c "import json; db=json.load(open('$USER_DB')); print('empty' if not db else '')" 2>/dev/null | grep -q empty && { warn "No users found." ; press_enter ; return; }
+    line_sep
+    read -rp "  Select user: " sel
+    local user_data
+    user_data=$(python3 -c "
+import json
+db = json.load(open('$USER_DB'))
+u = db[$((sel-1))]
+print(u['uuid'] + '|' + u['name'] + '|' + u['conf'])
+" 2>/dev/null)
+    [[ -z "$user_data" ]] && { err "Invalid selection." ; press_enter ; return; }
+    local uuid name conf
+    IFS='|' read -r uuid name conf <<< "$user_data"
+    local link; link=$(_gen_link "$conf" "$uuid" "$name")
+    echo ""
+    line
+    echo -e "  ${BOLD}${YELLOW}${name}${RESET}"
+    echo -e "  ${WHITE}${link}${RESET}"
+    line
+    press_enter
+}
+
+delete_user() {
+    header "DELETE V2RAY/XRAY USER"
+    python3 -c "
+import json
+try:
+    db = json.load(open('$USER_DB'))
+except:
+    db = []
+for i,u in enumerate(db,1):
+    print(f'  [{i}] {u[\"name\"]}  ({u[\"uuid\"][:8]}...)')
+" 2>/dev/null
+    line_sep
+    read -rp "  Select user to delete: " sel
+    local user_data
+    user_data=$(python3 -c "
+import json
+db = json.load(open('$USER_DB'))
+u = db[$((sel-1))]
+print(u['uuid'] + '|' + u['name'] + '|' + u['conf'])
+" 2>/dev/null)
+    [[ -z "$user_data" ]] && { err "Invalid selection." ; press_enter ; return; }
+    local uuid name conf
+    IFS='|' read -r uuid name conf <<< "$user_data"
+    confirm "Delete user '$name'?" || return
+
+    _remove_client_from_conf "$conf" "$uuid"
+    # Remove from DB
+    python3 -c "
+import json
+db = json.load(open('$USER_DB'))
+db = [u for u in db if u['uuid'] != '$uuid']
+json.dump(db, open('$USER_DB','w'), indent=2)
+" 2>/dev/null
+    systemctl restart xray &>/dev/null || systemctl restart v2ray &>/dev/null || true
+    ok "User '$name' deleted."
+    press_enter
+}
+
+# ── Menu ──────────────────────────────────────────────────────────
+
+while true; do
+    header "USER MANAGER V2RAY AND XRAY"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}NEW USER${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}DELETE USER${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}LIST USERS${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}GET CONNECTION LINK${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Return${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an option: " opt
+    case "$opt" in
+        1) add_user ;;
+        2) delete_user ;;
+        3) list_users ;;
+        4) show_link ;;
+        0) break ;;
+    esac
+done

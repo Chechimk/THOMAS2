@@ -79,7 +79,7 @@ show_menu() {
     echo ""
     case "$opt" in
         1)  ssh_accounts_menu ;;
-        2)  bash "$SBIN_DIR/v2rayManager" ;;
+        2)  bash "$SBIN_DIR/userRay" ;;
         3)  bash "$SBIN_DIR/protocolos" ;;
         4)  extra_tools_menu ;;
         5)  script_config_menu ;;
