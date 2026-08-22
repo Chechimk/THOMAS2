@@ -125,34 +125,59 @@ with open(conf, "w") as f:
 PYEOF
 }
 
-# ── Pick inbound ──────────────────────────────────────────────────
+# ── Pick inbound — sets global SELECTED_CONF ──────────────────────
+
+SELECTED_CONF=""
 
 pick_inbound() {
-    local -n _ret=$1
     local all_confs=()
-    for f in $(ls "$XR_CONF_DIR"/*.json 2>/dev/null) $(ls "$V2_CONF_DIR"/*.json 2>/dev/null); do
+
+    # Collect conf-dir files (glob-safe via find)
+    while IFS= read -r f; do
         all_confs+=("$f")
+    done < <(find "$XR_CONF_DIR" -maxdepth 1 -name '*.json' 2>/dev/null)
+    while IFS= read -r f; do
+        all_confs+=("$f")
+    done < <(find "$V2_CONF_DIR" -maxdepth 1 -name '*.json' 2>/dev/null)
+
+    # Also check main single-file config as fallback
+    for main_cfg in "/usr/local/etc/xray/config.json" "/usr/local/etc/v2ray/config.json"; do
+        [[ -f "$main_cfg" ]] && python3 -c "
+import json, sys
+d=json.load(open('$main_cfg'))
+sys.exit(0 if d.get('inbounds') else 1)
+" 2>/dev/null && all_confs+=("$main_cfg")
     done
-    [[ ${#all_confs[@]} -eq 0 ]] && { warn "No inbounds configured. Install Xray/V2Ray first." ; return 1; }
+
+    if [[ ${#all_confs[@]} -eq 0 ]]; then
+        warn "No inbound protocols found."
+        info "Go to: Protocol Manager → [15] V2RAY/XRAY → Add Protocol"
+        return 1
+    fi
+
     echo ""
+    line_sep
     local i=1
     for f in "${all_confs[@]}"; do
-        printf "  ${CYAN}[%d]${RESET}  %s  port=${WHITE}%s${RESET}  proto=${WHITE}%s${RESET}\n" \
-            "$i" "$(basename "$f" .json)" "$(_inbound_port "$f")" "$(_inbound_proto "$f")"
+        printf "  ${CYAN}[%d]${RESET}  %-35s  port=${WHITE}%-6s${RESET}  proto=${WHITE}%s${RESET}\n" \
+            "$i" "$(basename "$f")" "$(_inbound_port "$f")" "$(_inbound_proto "$f")"
         (( i++ ))
     done
     line_sep
-    read -rp "  Select inbound: " sel
-    _ret="${all_confs[$((sel-1))]}"
-    [[ -z "$_ret" ]] && { err "Invalid selection." ; return 1; }
+    read -rp "  Select inbound [1-${#all_confs[@]}]: " sel
+
+    if [[ ! "$sel" =~ ^[0-9]+$ ]] || (( sel < 1 || sel > ${#all_confs[@]} )); then
+        err "Invalid selection." ; return 1
+    fi
+    SELECTED_CONF="${all_confs[$((sel-1))]}"
 }
 
 # ── Main actions ──────────────────────────────────────────────────
 
 add_user() {
     header "NEW V2RAY/XRAY USER"
-    local conf_file
-    pick_inbound conf_file || { press_enter ; return; }
+    pick_inbound || { press_enter ; return; }
+    local conf_file="$SELECTED_CONF"
 
     # Gather inbound details for confirmation
     local proto port network path_val security
