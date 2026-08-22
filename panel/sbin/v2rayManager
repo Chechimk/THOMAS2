@@ -9,283 +9,197 @@ XR_BIN="/usr/local/bin/xray"
 XR_CONF_DIR="${XR_DIR}/conf"
 V2_CONF_DIR="${V2_DIR}/conf"
 
+# Globals populated by selector functions
+PROTO="" TRANSPORT="" PATH_OR_SVC="" SECURITY=""
+TLS_CERT="" TLS_KEY=""
+REALITY_PRIV="" REALITY_PUB="" REALITY_SID="" REALITY_DEST="" REALITY_SNI=""
+
 is_v2ray_installed() { [[ -f "$V2_BIN" ]]; }
 is_xray_installed()  { [[ -f "$XR_BIN" ]]; }
 
 download_v2ray() {
-    info "Downloading v2ray-linux-64..."
+    info "Downloading V2Ray..."
     bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh) \
-        && ok "V2Ray installed." || { err "V2Ray download failed." ; press_enter ; return 1; }
+        && ok "V2Ray installed." || { err "Download failed." ; press_enter ; return 1; }
 }
 
 download_xray() {
-    info "Downloading xray-linux-64..."
+    info "Downloading Xray..."
     bash <(curl -L https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh) \
-        && ok "Xray installed." || { err "Xray download failed." ; press_enter ; return 1; }
+        && ok "Xray installed." || { err "Download failed." ; press_enter ; return 1; }
+    _configure_xray_service
 }
 
-# ── Transport stream-settings builders ──────────────────────────
-
-_ws_stream() {
-    local path="$1"
-    # Realistic WS headers — looks like a browser upgrade
-    cat <<JSON
-"streamSettings": {
-      "network": "ws",
-      "wsSettings": {
-        "path": "${path}",
-        "headers": {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Sec-WebSocket-Protocol": "chat",
-          "Cache-Control": "no-cache"
-        }
-      }
-    }
-JSON
+# Point Xray service at conf/ directory so multiple inbound files work
+_configure_xray_service() {
+    local svc="/etc/systemd/system/xray.service"
+    [[ ! -f "$svc" ]] && { warn "Xray service file not found. Install Xray first." ; return; }
+    sed -i "s|ExecStart=.*|ExecStart=${XR_BIN} run -confdir ${XR_CONF_DIR}|" "$svc"
+    mkdir -p "$XR_CONF_DIR" /var/log/xray
+    # Base config: logging + outbounds (inbounds come from conf/ files)
+    cat > "${XR_DIR}/config.json" <<'BASEJSON'
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error":  "/var/log/xray/error.log"
+  },
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]
+}
+BASEJSON
+    systemctl daemon-reload
+    systemctl restart xray &>/dev/null || true
+    ok "Xray service configured for conf/ directory."
 }
 
-_xhttp_stream() {
-    local path="$1"
-    # XHTTP stream-up: continuous upload stream, random padding, mimics REST API
-    cat <<JSON
-"streamSettings": {
-      "network": "xhttp",
-      "xhttpSettings": {
-        "path": "${path}",
-        "mode": "stream-up",
-        "xPaddingBytes": "100-1000",
-        "scMaxEachPostBytes": "1000000-2000000",
-        "scMinPostsIntervalMs": "10-50",
-        "scStreamUpServerSecs": "5-15",
-        "noGRPCHeader": false,
-        "extra": {
-          "headers": {
-            "Accept": "application/json, */*",
-            "Content-Type": "application/octet-stream",
-            "X-Request-ID": ""
-          }
-        }
-      }
-    }
-JSON
-}
-
-_grpc_stream() {
-    local service="$1"
-    cat <<JSON
-"streamSettings": {
-      "network": "grpc",
-      "grpcSettings": {
-        "serviceName": "${service}",
-        "multiMode": true,
-        "idle_timeout": 60,
-        "health_check_timeout": 20,
-        "initial_windows_size": 35536
-      }
-    }
-JSON
-}
-
-_tcp_stream() {
-    # TCP with HTTP-header obfuscation to blend with normal traffic
-    cat <<JSON
-"streamSettings": {
-      "network": "tcp",
-      "tcpSettings": {
-        "header": {
-          "type": "http",
-          "request": {
-            "version": "1.1",
-            "method": "GET",
-            "path": ["/"],
-            "headers": {
-              "Host": ["www.cloudflare.com"],
-              "User-Agent": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64)"],
-              "Accept-Encoding": ["gzip, deflate"],
-              "Connection": ["keep-alive"]
-            }
-          }
-        }
-      }
-    }
-JSON
-}
-
-_httpupgrade_stream() {
-    local path="$1"
-    cat <<JSON
-"streamSettings": {
-      "network": "httpupgrade",
-      "httpupgradeSettings": {
-        "path": "${path}",
-        "headers": {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-      }
-    }
-JSON
-}
-
-# ── Security layer builders ──────────────────────────────────────
-
-_tls_settings() {
-    cat <<JSON
-,
-      "security": "tls",
-      "tlsSettings": {
-        "minVersion": "1.2",
-        "cipherSuites": "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-        "fingerprint": "chrome"
-      }
-JSON
-}
-
-_reality_settings() {
-    local dest="$1" sni="$2"
-    # Generate X25519 keypair via xray
-    local keypair; keypair=$("$XR_BIN" x25519 2>/dev/null)
-    local priv; priv=$(echo "$keypair" | awk '/Private/{print $3}')
-    local pub;  pub=$(echo "$keypair"  | awk '/Public/{print $3}')
-    local sid;  sid=$(openssl rand -hex 4)
-    cat <<JSON
-,
-      "security": "reality",
-      "realitySettings": {
-        "dest": "${dest}:443",
-        "serverNames": ["${sni}"],
-        "privateKey": "${priv}",
-        "shortIds": ["${sid}"],
-        "fingerprint": "chrome",
-        "spiderX": "/"
-      }
-JSON
-    # Print public key info for the user to copy into client config
-    warn "Client public key: ${pub}"
-    warn "Client shortId:    ${sid}"
-}
-
-# ── Interactive selectors ────────────────────────────────────────
-
+# ── Protocol selector ─────────────────────────────────────────────
 select_protocol() {
-    section "PROTOCOL"
+    line_sep
+    echo -e "  ${BOLD}${WHITE}PROTOCOL${RESET}"
+    line_sep
     echo -e "  ${CYAN}[1]${RESET}  VMess"
     echo -e "  ${CYAN}[2]${RESET}  VLESS"
-    echo -e "  ${CYAN}[3]${RESET}  VLESS + XTLS Vision  ${DIM}(Reality recommended)${RESET}"
+    echo -e "  ${CYAN}[3]${RESET}  VLESS + XTLS Vision  ${DIM}(use with Reality)${RESET}"
     echo -e "  ${CYAN}[4]${RESET}  Trojan"
-    line
+    line_sep
     read -rp "  Protocol: " p
     case "$p" in
         1) PROTO="vmess"      ;;
         2) PROTO="vless"      ;;
         3) PROTO="vless-xtls" ;;
         4) PROTO="trojan"     ;;
-        *) err "Invalid." ; return 1 ;;
+        *) err "Invalid protocol." ; return 1 ;;
     esac
 }
 
+# ── Transport selector ────────────────────────────────────────────
 select_transport() {
-    section "TRANSPORT"
-    echo -e "  ${CYAN}[1]${RESET}  WebSocket          ${DIM}— CDN-compatible, browser-friendly${RESET}"
-    echo -e "  ${CYAN}[2]${RESET}  XHTTP (stream-up)  ${DIM}— anti-fingerprint, REST API mimic${RESET}"
-    echo -e "  ${CYAN}[3]${RESET}  gRPC               ${DIM}— low-latency, multiplexed${RESET}"
-    echo -e "  ${CYAN}[4]${RESET}  TCP + HTTP obfs    ${DIM}— lightweight obfuscation${RESET}"
-    echo -e "  ${CYAN}[5]${RESET}  HTTPUpgrade        ${DIM}— CDN-friendly HTTP upgrade${RESET}"
-    line
+    line_sep
+    echo -e "  ${BOLD}${WHITE}TRANSPORT${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[1]${RESET}  WebSocket (WS)       ${DIM}CDN-compatible${RESET}"
+    echo -e "  ${CYAN}[2]${RESET}  XHTTP (stream-up)    ${DIM}anti-fingerprint, REST mimic${RESET}"
+    echo -e "  ${CYAN}[3]${RESET}  gRPC                 ${DIM}low-latency, multiplexed${RESET}"
+    echo -e "  ${CYAN}[4]${RESET}  TCP + HTTP obfs      ${DIM}lightweight${RESET}"
+    echo -e "  ${CYAN}[5]${RESET}  HTTPUpgrade          ${DIM}CDN-friendly${RESET}"
+    line_sep
     read -rp "  Transport: " t
     local rpath="/$(openssl rand -hex 4)/$(openssl rand -hex 4)"
-    local rsvc; rsvc="$(openssl rand -hex 6)Service"
+    local rsvc; rsvc="$(openssl rand -hex 6)Svc"
     case "$t" in
         1) TRANSPORT="ws"
-           get_input "Path (Enter=random)" _p
-           PATH_OR_SVC="${_p:-/$(openssl rand -hex 6)}"
-           STREAM_JSON=$(_ws_stream "$PATH_OR_SVC") ;;
+           read -rp "  ${CYAN}Path (Enter=random): ${RESET}" _p
+           PATH_OR_SVC="${_p:-/$(openssl rand -hex 6)}" ;;
         2) TRANSPORT="xhttp"
-           get_input "Path (Enter=random API path)" _p
-           PATH_OR_SVC="${_p:-/api/v1/$(openssl rand -hex 4)}"
-           STREAM_JSON=$(_xhttp_stream "$PATH_OR_SVC") ;;
+           read -rp "  ${CYAN}API path (Enter=random): ${RESET}" _p
+           PATH_OR_SVC="${_p:-/api/v1/$(openssl rand -hex 4)}" ;;
         3) TRANSPORT="grpc"
-           get_input "Service name (Enter=random)" _p
-           PATH_OR_SVC="${_p:-$rsvc}"
-           STREAM_JSON=$(_grpc_stream "$PATH_OR_SVC") ;;
-        4) TRANSPORT="tcp"   ; PATH_OR_SVC="-"
-           STREAM_JSON=$(_tcp_stream) ;;
+           read -rp "  ${CYAN}Service name (Enter=random): ${RESET}" _p
+           PATH_OR_SVC="${_p:-$rsvc}" ;;
+        4) TRANSPORT="tcp" ; PATH_OR_SVC="-" ;;
         5) TRANSPORT="httpupgrade"
-           get_input "Path (Enter=random)" _p
-           PATH_OR_SVC="${_p:-$rpath}"
-           STREAM_JSON=$(_httpupgrade_stream "$PATH_OR_SVC") ;;
+           read -rp "  ${CYAN}Path (Enter=random): ${RESET}" _p
+           PATH_OR_SVC="${_p:-$rpath}" ;;
         *) err "Invalid transport." ; return 1 ;;
     esac
 }
 
+# ── Security selector ─────────────────────────────────────────────
 select_security() {
-    section "SECURITY"
-    echo -e "  ${CYAN}[1]${RESET}  None     ${DIM}— use behind CDN / Nginx TLS termination${RESET}"
-    echo -e "  ${CYAN}[2]${RESET}  TLS      ${DIM}— direct TLS (requires cert)${RESET}"
-    echo -e "  ${CYAN}[3]${RESET}  Reality  ${DIM}— VLESS only, strongest anti-detection${RESET}"
-    line
+    line_sep
+    echo -e "  ${BOLD}${WHITE}SECURITY${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[1]${RESET}  None     ${DIM}behind CDN / Nginx TLS termination${RESET}"
+    echo -e "  ${CYAN}[2]${RESET}  TLS      ${DIM}direct TLS, requires cert/key${RESET}"
+    echo -e "  ${CYAN}[3]${RESET}  Reality  ${DIM}VLESS only, strongest anti-detection${RESET}"
+    line_sep
     read -rp "  Security: " s
     case "$s" in
-        1) SECURITY_EXTRA="" ;;
-        2) SECURITY_EXTRA=$(_tls_settings) ;;
-        3) get_input "Destination host (e.g. www.microsoft.com)" _dest
-           get_input "Server name / SNI" _sni
-           SECURITY_EXTRA=$(_reality_settings \
-               "${_dest:-www.microsoft.com}" "${_sni:-www.microsoft.com}") ;;
-        *) err "Invalid." ; return 1 ;;
+        1) SECURITY="none" ;;
+        2) SECURITY="tls"
+           read -rp "  ${CYAN}Cert file (fullchain.pem): ${RESET}" TLS_CERT
+           read -rp "  ${CYAN}Key file (privkey.pem):   ${RESET}" TLS_KEY ;;
+        3) SECURITY="reality"
+           [[ "$PROTO" != "vless"* ]] && { warn "Reality requires VLESS protocol." ; return 1; }
+           read -rp "  ${CYAN}Destination host (e.g. www.microsoft.com): ${RESET}" REALITY_DEST
+           read -rp "  ${CYAN}Server name / SNI: ${RESET}" REALITY_SNI
+           REALITY_DEST="${REALITY_DEST:-www.microsoft.com}"
+           REALITY_SNI="${REALITY_SNI:-www.microsoft.com}"
+           local keypair; keypair=$("$XR_BIN" x25519 2>/dev/null)
+           REALITY_PRIV=$(echo "$keypair" | awk '/Private/{print $3}')
+           REALITY_PUB=$(echo "$keypair"  | awk '/Public/{print $3}')
+           REALITY_SID=$(openssl rand -hex 4) ;;
+        *) err "Invalid security." ; return 1 ;;
     esac
 }
 
-# ── Config file writer ───────────────────────────────────────────
-
+# ── Config writer — builds valid JSON directly ────────────────────
 write_conf() {
     local conf_dir="$1" port="$2" uuid="$3"
-    mkdir -p "$conf_dir"
+    mkdir -p "$conf_dir" /var/log/xray /var/log/v2ray
     local outfile="${conf_dir}/${PROTO}_${TRANSPORT}_${port}.json"
 
-    # Build inbound settings block per protocol
-    local client_block
+    # Settings block per protocol
+    local settings
     case "$PROTO" in
-        vmess)      client_block='"clients": [{"id":"'"$uuid"'","alterId":0}]' ;;
-        vless)      client_block='"clients": [{"id":"'"$uuid"'","flow":""}], "decryption":"none"' ;;
-        vless-xtls) client_block='"clients": [{"id":"'"$uuid"'","flow":"xtls-rprx-vision"}], "decryption":"none"' ;;
-        trojan)     client_block='"clients": [{"password":"'"$uuid"'"}]' ;;
+        vmess)
+            settings='"clients":[{"id":"'"$uuid"'","alterId":0}]' ;;
+        vless)
+            settings='"clients":[{"id":"'"$uuid"'","flow":""}],"decryption":"none"' ;;
+        vless-xtls)
+            settings='"clients":[{"id":"'"$uuid"'","flow":"xtls-rprx-vision"}],"decryption":"none"' ;;
+        trojan)
+            settings='"clients":[{"password":"'"$uuid"'"}]' ;;
     esac
 
-    # Inject security extras into streamSettings closing brace
-    local stream_with_sec="${STREAM_JSON%\}*}${SECURITY_EXTRA}
-    }"
+    # Security block (goes inside streamSettings)
+    local sec_block=""
+    case "$SECURITY" in
+        tls) sec_block=$(printf '"security":"tls","tlsSettings":{"certificates":[{"certificateFile":"%s","keyFile":"%s"}],"minVersion":"1.2","fingerprint":"chrome"},' "$TLS_CERT" "$TLS_KEY") ;;
+        reality) sec_block=$(printf '"security":"reality","realitySettings":{"dest":"%s:443","serverNames":["%s"],"privateKey":"%s","shortIds":["%s"],"fingerprint":"chrome","spiderX":"/"},' \
+            "$REALITY_DEST" "$REALITY_SNI" "$REALITY_PRIV" "$REALITY_SID") ;;
+    esac
 
-    cat > "$outfile" <<JSON
-{
-  "log": { "loglevel": "warning", "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log" },
-  "inbounds": [
-    {
-      "port": ${port},
-      "listen": "0.0.0.0",
-      "protocol": "${PROTO%%-*}",
-      "settings": { ${client_block} },
-      ${stream_with_sec},
-      "sniffing": { "enabled": true, "destOverride": ["http","tls","quic"] }
-    }
-  ],
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "block" }
-  ]
+    # Transport block (goes inside streamSettings)
+    local net_block=""
+    case "$TRANSPORT" in
+        ws) net_block=$(printf '"wsSettings":{"path":"%s","headers":{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)","Sec-WebSocket-Protocol":"chat","Cache-Control":"no-cache"}}' "$PATH_OR_SVC") ;;
+        xhttp) net_block=$(printf '"xhttpSettings":{"path":"%s","mode":"stream-up","xPaddingBytes":"100-1000","scMaxEachPostBytes":"1000000-2000000","scMinPostsIntervalMs":"10-50","scStreamUpServerSecs":"5-15","noGRPCHeader":false,"extra":{"headers":{"Accept":"application/json, */*","Content-Type":"application/octet-stream"}}}' "$PATH_OR_SVC") ;;
+        grpc) net_block=$(printf '"grpcSettings":{"serviceName":"%s","multiMode":true,"idle_timeout":60,"health_check_timeout":20,"initial_windows_size":35536}' "$PATH_OR_SVC") ;;
+        tcp)  net_block='"tcpSettings":{"header":{"type":"http","request":{"version":"1.1","method":"GET","path":["/"],"headers":{"Host":["www.cloudflare.com"],"User-Agent":["Mozilla/5.0"],"Connection":["keep-alive"]}}}}' ;;
+        httpupgrade) net_block=$(printf '"httpupgradeSettings":{"path":"%s","headers":{"User-Agent":"Mozilla/5.0"}}' "$PATH_OR_SVC") ;;
+    esac
+
+    # Build complete config JSON
+    python3 - <<PYEOF
+import json
+config = {
+    "inbounds": [{
+        "port": ${port},
+        "listen": "0.0.0.0",
+        "protocol": "${PROTO%%-*}",
+        "settings": json.loads("{" + """${settings}""" + "}"),
+        "streamSettings": json.loads("{" + """${sec_block}"network":"${TRANSPORT}",${net_block}""" + "}"),
+        "sniffing": {"enabled": True, "destOverride": ["http","tls","quic"]}
+    }]
 }
-JSON
-    echo "$outfile"
+with open("${outfile}", "w") as f:
+    json.dump(config, f, indent=2)
+print("${outfile}")
+PYEOF
 }
 
-# ── Add / remove protocol flows ──────────────────────────────────
-
+# ── Add protocol ──────────────────────────────────────────────────
 add_protocol() {
     local bin_type="$1" conf_dir="$2"
     header "ADD ${bin_type^^} PROTOCOL"
 
-    get_input "Listen port" port
+    read -rp "  ${CYAN}Listen port: ${RESET}" port
     [[ ! "$port" =~ ^[0-9]+$ ]] && { err "Invalid port." ; press_enter ; return; }
-    port_in_use "$port"         && { err "Port $port already in use." ; press_enter ; return; }
+    port_in_use "$port" && { err "Port $port is already in use." ; press_enter ; return; }
 
     local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
 
@@ -294,28 +208,46 @@ add_protocol() {
     select_security  || { press_enter ; return; }
 
     local outfile; outfile=$(write_conf "$conf_dir" "$port" "$uuid")
-    systemctl restart "$bin_type" &>/dev/null || true
 
-    echo ""
-    line
-    ok "Protocol configured!"
-    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Protocol:"  "$PROTO"
-    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Transport:" "$TRANSPORT"
-    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Port:"      "$port"
-    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "UUID/Pass:" "$uuid"
-    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Path/Svc:"  "$PATH_OR_SVC"
-    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Config:"    "$outfile"
-    line
+    if [[ ! -f "$outfile" ]]; then
+        err "Failed to generate config. Check python3 is installed."
+        press_enter ; return
+    fi
+
+    if python3 -m json.tool "$outfile" &>/dev/null; then
+        systemctl restart "$bin_type" &>/dev/null || true
+        echo ""
+        line
+        ok "Protocol configured!"
+        printf "  %-14s %s\n" "Protocol:"  "$PROTO"
+        printf "  %-14s %s\n" "Transport:" "$TRANSPORT"
+        printf "  %-14s %s\n" "Port:"      "$port"
+        printf "  %-14s %s\n" "UUID/Pass:" "$uuid"
+        printf "  %-14s %s\n" "Path/Svc:"  "$PATH_OR_SVC"
+        printf "  %-14s %s\n" "Security:"  "$SECURITY"
+        if [[ "$SECURITY" == "reality" ]]; then
+            line_sep
+            warn "Copy these to your client:"
+            printf "  %-14s %s\n" "Public Key:" "$REALITY_PUB"
+            printf "  %-14s %s\n" "Short ID:"   "$REALITY_SID"
+            printf "  %-14s %s\n" "SNI:"        "$REALITY_SNI"
+        fi
+        line
+    else
+        err "Invalid JSON in $outfile:"
+        cat "$outfile"
+    fi
     press_enter
 }
 
+# ── Remove protocol ───────────────────────────────────────────────
 remove_protocol() {
     local bin_type="$1" conf_dir="$2"
     header "REMOVE ${bin_type^^} PROTOCOL"
     local confs; confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
     [[ -z "$confs" ]] && { warn "No protocols configured." ; press_enter ; return; }
     echo "$confs" | nl -w3 -s') '
-    get_input "Select number to remove" sel
+    read -rp "  Select number: " sel
     local f; f=$(echo "$confs" | sed -n "${sel}p")
     [[ -z "$f" ]] && { err "Invalid selection." ; press_enter ; return; }
     confirm "Remove $(basename "$f")?" || return
@@ -325,57 +257,60 @@ remove_protocol() {
     press_enter
 }
 
-# ── Unified manager UI (shared for v2ray and xray) ───────────────
-
+# ── Manager UI ────────────────────────────────────────────────────
 manager_ui() {
     local bin_type="$1" conf_dir="$2"
     while true; do
         header "${bin_type^^} ADMINISTRATOR"
+        line_sep
         printf "  ${DIM}STATUS:   ${RESET}%s\n" "$(service_status "$bin_type")"
         printf "  ${DIM}INBOUNDS: ${RESET}${WHITE}%s${RESET}\n" \
             "$(ls "${conf_dir}"/*.json 2>/dev/null | wc -l) configured"
-        line
-        echo -e "  ${CYAN}[1]${RESET}  Add Protocol  ${DIM}(WS / XHTTP / gRPC / TCP / HTTPUpgrade)${RESET}"
-        echo -e "  ${CYAN}[2]${RESET}  Remove Protocol"
-        echo -e "  ${CYAN}[3]${RESET}  List Protocols"
-        echo -e "  ${CYAN}[4]${RESET}  View Config (select)"
-        echo -e "  ${CYAN}[5]${RESET}  Edit Config (nano)"
-        echo -e "  ${CYAN}[6]${RESET}  Real-Time Log"
-        echo -e "  ${CYAN}[7]${RESET}  Full Log (last 100 lines)"
-        echo -e "  ${CYAN}[8]${RESET}  Service Status"
-        echo -e "  ${CYAN}[9]${RESET}  Restart Service"
-        echo -e "  ${CYAN}[10]${RESET} Start / Stop Service"
-        echo -e "  ${CYAN}[11]${RESET} Install ${bin_type^}"
-        echo -e "  ${RED}[12]${RESET} Uninstall ${bin_type^}"
-        echo -e "  ${YELLOW}[0]${RESET}  Back"
-        line
-        read -rp "  Enter an option: " opt
+        line_sep
+        echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}ADD PROTOCOL (WS/XHTTP/gRPC/TCP/HTTPUpgrade)${RESET}"
+        echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}REMOVE PROTOCOL${RESET}"
+        echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}LIST PROTOCOLS${RESET}"
+        echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}VIEW CONFIG${RESET}"
+        echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}EDIT CONFIG (nano)${RESET}"
+        echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}REAL-TIME LOG${RESET}"
+        echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}FULL LOG (last 100)${RESET}"
+        echo -e "  ${CYAN}[8]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+        echo -e "  ${CYAN}[9]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+        echo -e "  ${CYAN}[10]>${RESET} ${WHITE}START / STOP${RESET}"
+        echo -e "  ${CYAN}[11]>${RESET} ${WHITE}INSTALL ${bin_type^^}${RESET}"
+        echo -e "  ${BRED}[12]>${RESET} ${WHITE}UNINSTALL ${bin_type^^}${RESET}"
+        line_sep
+        echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+        line_sep
+        echo ""
+        read -rp "  Enter an Option: " opt
         local confs f sel
         case "$opt" in
             1)  add_protocol "$bin_type" "$conf_dir" ;;
             2)  remove_protocol "$bin_type" "$conf_dir" ;;
-            3)  header "INBOUND LIST — ${bin_type^^}"
+            3)  header "INBOUNDS — ${bin_type^^}"
                 confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
-                if [[ -n "$confs" ]]; then
-                    echo "$confs" | while IFS= read -r f; do
-                        local name; name=$(basename "$f" .json)
-                        printf "  ${CYAN}%-30s${RESET} %s\n" "$name" "$(du -h "$f" | cut -f1)"
-                    done
-                else warn "No configs found."; fi
+                [[ -z "$confs" ]] && { warn "None configured." ; press_enter ; continue; }
+                echo "$confs" | while IFS= read -r f; do
+                    local nm; nm=$(basename "$f" .json)
+                    local pv; pv=$(python3 -c "import json; d=json.load(open('$f')); print(d['inbounds'][0]['port'])" 2>/dev/null || echo "?")
+                    printf "  ${CYAN}%-38s${RESET} port=${WHITE}%s${RESET}\n" "$nm" "$pv"
+                done
                 press_enter ;;
             4)  confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
                 [[ -z "$confs" ]] && { warn "None." ; press_enter ; continue; }
                 echo "$confs" | nl -w3 -s') '
-                get_input "Select number" sel
+                read -rp "  Select: " sel
                 f=$(echo "$confs" | sed -n "${sel}p")
                 [[ -n "$f" ]] && { python3 -m json.tool "$f" 2>/dev/null || cat "$f"; }
                 press_enter ;;
             5)  confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
                 [[ -z "$confs" ]] && { warn "None." ; press_enter ; continue; }
                 echo "$confs" | nl -w3 -s') '
-                get_input "Select number" sel
+                read -rp "  Select: " sel
                 f=$(echo "$confs" | sed -n "${sel}p")
-                [[ -n "$f" ]] && nano "$f" ;;
+                [[ -n "$f" ]] && nano "$f"
+                systemctl restart "$bin_type" &>/dev/null || true ;;
             6)  journalctl -fu "$bin_type" ;;
             7)  journalctl -u "$bin_type" --no-pager | tail -100 ; press_enter ;;
             8)  systemctl status "$bin_type" --no-pager ; press_enter ;;
@@ -403,17 +338,21 @@ manager_ui() {
 }
 
 # ── Entry point ───────────────────────────────────────────────────
-
 while true; do
-    header "V2RAY AND XRAY INSTALLER"
-    echo -e "  ${CYAN}[1]${RESET}  V2Ray Manager"
-    echo -e "  ${CYAN}[2]${RESET}  Xray Manager  ${DIM}(XHTTP, Reality, XTLS Vision)${RESET}"
-    echo -e "  ${YELLOW}[0]${RESET}  Back"
-    line
-    read -rp "  Enter an option: " opt
+    header "V2RAY AND XRAY MANAGER"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}V2Ray Manager${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}Xray Manager${RESET}  ${DIM}(XHTTP / Reality / XTLS Vision)${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}Configure Xray Service (conf/ mode)${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
     case "$opt" in
         1) mkdir -p "$V2_CONF_DIR" ; manager_ui "v2ray" "$V2_CONF_DIR" ;;
         2) mkdir -p "$XR_CONF_DIR" ; manager_ui "xray"  "$XR_CONF_DIR" ;;
+        3) _configure_xray_service ; press_enter ;;
         0) break ;;
     esac
 done
