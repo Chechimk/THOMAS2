@@ -154,26 +154,67 @@ add_user() {
     local conf_file
     pick_inbound conf_file || { press_enter ; return; }
 
-    local proto; proto=$(_inbound_proto "$conf_file")
+    # Gather inbound details for confirmation
+    local proto port network path_val security
+    proto=$(    _inbound_proto   "$conf_file")
+    port=$(     _inbound_port    "$conf_file")
+    network=$(  _inbound_network "$conf_file")
+    path_val=$( _inbound_path    "$conf_file")
+    security=$( python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0].get('streamSettings',{}).get('security','none'))" 2>/dev/null)
+
+    # Show inbound summary and ask user to confirm path
+    echo ""
+    line_sep
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Protocol:"  "$proto"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Port:"      "$port"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Transport:" "$network"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Security:"  "$security"
+    printf "  ${DIM}%-14s${RESET}${YELLOW}%s${RESET}\n" "Path/Svc:"  "${path_val:-(none)}"
+    line_sep
+    read -rp "  ${CYAN}Change path? (Enter to keep '${path_val:-none}'): ${RESET}" new_path
+    [[ -n "$new_path" ]] && {
+        # Update path in the config file
+        export _CONF="$conf_file" _NET="$network" _PATH="$new_path"
+        python3 << 'PYEOF'
+import json, os
+d = json.load(open(os.environ["_CONF"]))
+net = os.environ["_NET"]
+key = net + "Settings"
+ss = d["inbounds"][0].get("streamSettings", {})
+if key in ss:
+    ss[key]["path"] = os.environ["_PATH"]
+    d["inbounds"][0]["streamSettings"] = ss
+    with open(os.environ["_CONF"], "w") as f:
+        json.dump(d, f, indent=2)
+PYEOF
+        path_val="$new_path"
+        ok "Path updated to: $path_val"
+    }
+    line_sep
     read -rp "  ${CYAN}Username / label: ${RESET}" uname
     [[ -z "$uname" ]] && { err "Name required." ; press_enter ; return; }
 
     local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
     local flow=""
     [[ "$proto" == "vless" ]] && {
-        # Check if XTLS Vision is configured
-        flow=$(python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0]['settings']['clients'][0].get('flow',''))" 2>/dev/null)
+        flow=$(python3 -c "import json; d=json.load(open('$conf_file')); cls=d['inbounds'][0]['settings']['clients']; print(cls[0].get('flow','') if cls else '')" 2>/dev/null)
     }
 
     _add_client_to_conf "$conf_file" "$uuid" "$flow"
 
-    # Save to user DB with timestamp
-    python3 -c "
-import json, time
-db = json.load(open('$USER_DB'))
-db.append({'name':'$uname','uuid':'$uuid','conf':'$conf_file','created':int(time.time())})
-json.dump(db, open('$USER_DB','w'), indent=2)
-" 2>/dev/null
+    # Save to user DB
+    export _DB="$USER_DB" _NAME="$uname" _UUID2="$uuid" _CONF2="$conf_file"
+    python3 << 'PYEOF'
+import json, time, os
+db_path = os.environ["_DB"]
+try:
+    db = json.load(open(db_path))
+except:
+    db = []
+db.append({"name": os.environ["_NAME"], "uuid": os.environ["_UUID2"],
+           "conf": os.environ["_CONF2"], "created": int(time.time())})
+json.dump(db, open(db_path, "w"), indent=2)
+PYEOF
 
     systemctl restart xray &>/dev/null || systemctl restart v2ray &>/dev/null || true
 
@@ -182,10 +223,12 @@ json.dump(db, open('$USER_DB','w'), indent=2)
     echo ""
     line
     ok "User created!"
-    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "Name:"   "$uname"
-    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "UUID:"   "$uuid"
-    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "Port:"   "$(_inbound_port "$conf_file")"
-    printf "  ${DIM}%-12s${RESET} ${WHITE}%s${RESET}\n" "Proto:"  "$proto"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Name:"      "$uname"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "UUID:"      "$uuid"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Port:"      "$port"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Protocol:"  "$proto"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Transport:" "$network"
+    printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Path/Svc:"  "${path_val:-(none)}"
     line_sep
     echo -e "  ${BOLD}${YELLOW}Connection Link:${RESET}"
     echo -e "  ${WHITE}${link}${RESET}"
