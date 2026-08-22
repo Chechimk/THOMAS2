@@ -51,7 +51,7 @@ while true; do
     header "WS-EPRO ADMINISTRATOR"
     if is_installed_ws; then
         printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $WS_SVC)"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Service Status"
         echo -e "  ${CYAN}[2]${RESET}  Restart Service"
         echo -e "  ${CYAN}[3]${RESET}  Start / Stop Service"
@@ -60,11 +60,11 @@ while true; do
         echo -e "  ${RED}[6]${RESET}  Uninstall"
     else
         echo -e "  ${YELLOW}WS-ePro is not installed.${RESET}"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Install WS-ePro"
     fi
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) is_installed_ws && { systemctl status "$WS_SVC" --no-pager ; press_enter; } || install_ws ;;

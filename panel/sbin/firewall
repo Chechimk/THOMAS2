@@ -12,7 +12,7 @@ while true; do
     echo -e "  ${CYAN}[6]${RESET}  View Current IPTables Rules"
     echo -e "  ${CYAN}[7]${RESET}  Flush All Rules (CAUTION)"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) # Block common BitTorrent ports and protocols

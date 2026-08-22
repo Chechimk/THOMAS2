@@ -5,13 +5,13 @@ require_root
 while true; do
     header "ONLINE USERS"
     printf "  ${BOLD}%-18s %-16s %-20s${RESET}\n" "USER" "IP" "LOGIN TIME"
-    echo -e "${YELLOW}$(line2)${RESET}"
+    line2
     who | awk '{printf "  %-18s %-16s %-20s\n", $1, $5, $3" "$4}'
     echo ""
     printf "  ${DIM}Total sessions: ${RESET}${WHITE}%s${RESET}\n" "$(who | wc -l)"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     echo -e "  ${CYAN}[r]${RESET} Refresh  ${CYAN}[k]${RESET} Kill session  ${YELLOW}[0]${RESET} Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         r|R) continue ;;

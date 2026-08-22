@@ -78,7 +78,7 @@ while true; do
     if is_stunnel_installed; then
         printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status stunnel4)"
         printf "  ${DIM}PORTS: ${RESET}${WHITE}%s${RESET}\n" "$(list_ports)"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Add SSL Port"
         echo -e "  ${CYAN}[2]${RESET}  Remove SSL Port"
         echo -e "  ${CYAN}[3]${RESET}  Modify Port Settings (nano)"
@@ -91,11 +91,11 @@ while true; do
         echo -e "  ${RED}[10]${RESET} Uninstall Stunnel"
     else
         echo -e "  ${YELLOW}Stunnel is not installed.${RESET}"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Install Stunnel"
     fi
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1)  is_stunnel_installed && add_port_conf || install_stunnel ;;

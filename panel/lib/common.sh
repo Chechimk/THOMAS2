@@ -11,12 +11,15 @@ LIB_DIR="$PANEL_DIR/lib"
 
 WIDTH=64
 
-# ── Border drawing (red box style matching screenshot) ───────────
-line_top() { echo -e "${RED}╔$(printf '═%.0s' $(seq 1 $((WIDTH-2))))╗${RESET}"; }
-line_bot() { echo -e "${RED}╚$(printf '═%.0s' $(seq 1 $((WIDTH-2))))╝${RESET}"; }
-line_mid() { echo -e "${RED}╠$(printf '═%.0s' $(seq 1 $((WIDTH-2))))╣${RESET}"; }
-line_sep() { echo -e "${RED}$(printf '─%.0s' $(seq 1 $WIDTH))${RESET}"; }
-line()     { echo -e "${RED}$(printf '═%.0s' $(seq 1 $WIDTH))${RESET}"; }
+# ── Border drawing ────────────────────────────────────────────────
+line_top() { printf "${RED}╔"; printf '═%.0s' $(seq 1 $((WIDTH-2))); printf "╗${RESET}\n"; }
+line_bot() { printf "${RED}╚"; printf '═%.0s' $(seq 1 $((WIDTH-2))); printf "╝${RESET}\n"; }
+line_mid() { printf "${RED}╠"; printf '═%.0s' $(seq 1 $((WIDTH-2))); printf "╣${RESET}\n"; }
+line_sep() { printf "${RED}"; printf '─%.0s' $(seq 1 $WIDTH); printf "${RESET}\n"; }
+
+# Backward-compat helpers used in module scripts
+line()  { printf "${RED}"; printf '═%.0s' $(seq 1 $WIDTH); printf "${RESET}\n"; }
+line2() { line_sep; }
 
 _center() {
     local t="$1" tlen="${#1}"
@@ -78,12 +81,14 @@ require_root() {
 
 get_ip() { hostname -I | awk '{print $1}'; }
 
-sys_ram_total()  { free -m | awk '/Mem:/{print $2}'; }
-sys_ram_used()   { free -m | awk '/Mem:/{print $3}'; }
-sys_ram_free()   { free -m | awk '/Mem:/{print $4}'; }
-sys_disk_total() { df -h / | awk 'NR==2{print $2}'; }
-sys_disk_used()  { df -h / | awk 'NR==2{print $3}'; }
-sys_disk_free()  { df -h / | awk 'NR==2{print $4}'; }
-sys_cpu_cores()  { nproc; }
-sys_cpu_usage()  { top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d. -f1; }
-sys_uptime()     { uptime -p | sed 's/up //'; }
+sys_ram_total()  { free -m 2>/dev/null | awk '/Mem:/{printf "%.2fGB", $2/1024}'; }
+sys_ram_used()   { free -m 2>/dev/null | awk '/Mem:/{printf "%.2fMB", $3}'; }
+sys_ram_free()   { free -m 2>/dev/null | awk '/Mem:/{printf "%.2fGB", $4/1024}'; }
+sys_ram_buffer() { free -m 2>/dev/null | awk '/Mem:/{printf "%.2fMB", $6}'; }
+sys_ram_cache()  { free -m 2>/dev/null | awk '/Mem:/{printf "%.2fMB", $7}'; }
+sys_disk_total() { df -h / 2>/dev/null | awk 'NR==2{print $2}'; }
+sys_disk_used()  { df -h / 2>/dev/null | awk 'NR==2{print $3}'; }
+sys_disk_free()  { df -h / 2>/dev/null | awk 'NR==2{print $4}'; }
+sys_cpu_cores()  { nproc 2>/dev/null; }
+sys_cpu_usage()  { grep 'cpu ' /proc/stat | awk '{u=$2+$4; t=$2+$3+$4+$5; printf "%.1f%%", (u/t)*100}'; }
+sys_uptime()     { uptime -p 2>/dev/null | sed 's/up //'; }

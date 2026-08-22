@@ -41,7 +41,7 @@ while true; do
     echo -e "  ${CYAN}[3]${RESET}  List Certificates"
     echo -e "  ${CYAN}[4]${RESET}  Install acme.sh"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) issue_cert ;;

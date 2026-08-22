@@ -5,12 +5,12 @@ require_root
 while true; do
     header "MODIFY TIME ZONE"
     printf "  ${DIM}Current: ${RESET}${WHITE}%s${RESET}\n" "$(timedatectl | grep 'Time zone' | awk '{print $3}')"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     echo -e "  ${CYAN}[1]${RESET}  Set Time Zone"
     echo -e "  ${CYAN}[2]${RESET}  List Available Zones"
     echo -e "  ${CYAN}[3]${RESET}  Sync Time (NTP)"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) get_input "Time zone (e.g. America/New_York)" tz

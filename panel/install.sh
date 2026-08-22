@@ -1,8 +1,8 @@
 #!/bin/bash
 clear
 
-RED='\e[31m'; GREEN='\e[32m'; YELLOW='\e[33m'; CYAN='\e[36m'
-WHITE='\e[97m'; RESET='\e[0m'; BOLD='\e[1m'
+RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; CYAN=$'\e[36m'
+WHITE=$'\e[97m'; RESET=$'\e[0m'; BOLD=$'\e[1m'
 
 ok()   { echo -e "  ${GREEN}[+]${RESET} $1"; }
 err()  { echo -e "  ${RED}[-]${RESET} $1" >&2; exit 1; }

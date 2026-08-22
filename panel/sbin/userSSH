@@ -4,7 +4,7 @@ require_root
 
 header "SSH USER LIST"
 printf "  ${BOLD}%-18s %-12s %-12s %-10s${RESET}\n" "USER" "EXPIRES" "STATUS" "CONNECTIONS"
-echo -e "${YELLOW}$(line2)${RESET}"
+line2
 
 awk -F: '$3>=1000 && $7!="/usr/sbin/nologin" && $7!="/bin/false" {print $1}' /etc/passwd | \
 while read -r user; do
@@ -23,10 +23,10 @@ while read -r user; do
     printf "  %-18s %-12s %-22s %-10s\n" "$user" "${exp:-never}" "$status" "$conns"
 done
 
-echo -e "${CYAN}$(line)${RESET}"
+line
 echo -e "  ${CYAN}[1]${RESET} Delete user  ${CYAN}[2]${RESET} Block user  ${CYAN}[3]${RESET} Unblock user"
 echo -e "  ${CYAN}[4]${RESET} Extend expiry  ${YELLOW}[0]${RESET} Back"
-echo -e "${CYAN}$(line)${RESET}"
+line
 read -rp "  Enter an option: " opt
 
 case "$opt" in

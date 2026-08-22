@@ -90,7 +90,7 @@ configure_banner() {
     echo -e "  ${CYAN}[2]${RESET}  Enable banner in sshd_config"
     echo -e "  ${CYAN}[3]${RESET}  Disable banner"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) nano /etc/issue.net ;;
@@ -110,7 +110,7 @@ configure_root_access() {
     echo -e "  ${CYAN}[2]${RESET}  Enable root login in SSH"
     echo -e "  ${CYAN}[3]${RESET}  Disable root login in SSH"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) passwd root ;;
@@ -129,7 +129,7 @@ while true; do
     printf "  ${DIM}PORTS: ${RESET}${WHITE}%s${RESET}\n" "${local_ports:-none}"
     printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status ssh)"
     [[ $(check_socket) ]] && warn "SSH is managed via systemd socket"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     echo -e "  ${CYAN}[1]${RESET}  Modify SSH Port"
     echo -e "  ${CYAN}[2]${RESET}  Start / Stop SSH Server"
     echo -e "  ${CYAN}[3]${RESET}  Restart SSH Server"
@@ -139,7 +139,7 @@ while true; do
     echo -e "  ${CYAN}[7]${RESET}  Uninstall OpenSSH-Server"
     [[ $(check_socket) ]] && echo -e "  ${YELLOW}[8]${RESET}  Disable Systemd Socket"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) modify_ports ;;

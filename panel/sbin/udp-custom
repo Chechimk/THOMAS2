@@ -57,7 +57,7 @@ while true; do
         ipt=$(grep IPT_RANGE "$UDP_CONF" 2>/dev/null | cut -d= -f2)
         printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $UDP_SVC)"
         printf "  ${DIM}UDP PORT: ${RESET}${WHITE}%s${RESET}   ${DIM}IPTABLES: ${RESET}${WHITE}%s${RESET}\n" "$local_port" "$ipt"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Modify Port"
         echo -e "  ${CYAN}[2]${RESET}  Modify IPTables Range"
         echo -e "  ${CYAN}[3]${RESET}  Service Status"
@@ -68,11 +68,11 @@ while true; do
         echo -e "  ${RED}[8]${RESET}  Uninstall"
     else
         echo -e "  ${YELLOW}UDP-Custom is not installed.${RESET}"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Install UDP-Custom"
     fi
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) is_installed_udp && modify_port || install_udp ;;

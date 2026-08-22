@@ -102,9 +102,9 @@ EOF
 view_client() {
     header "OVPN CLIENT"
     info "Copy and save to a .ovpn file:"
-    echo -e "${YELLOW}$(line2)${RESET}"
+    line2
     cat "$CLIENT_CONF" 2>/dev/null || err "Client config not found."
-    echo -e "${YELLOW}$(line2)${RESET}"
+    line2
     press_enter
 }
 
@@ -127,7 +127,7 @@ while true; do
         printf "  ${DIM}PORT: ${RESET}${WHITE}%s/%s${RESET}\n" \
             "$(grep '^port' "$CONF" 2>/dev/null | awk '{print $2}')" \
             "$(grep '^proto' "$CONF" 2>/dev/null | awk '{print $2}')"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  View OVPN Client"
         echo -e "  ${CYAN}[2]${RESET}  Reconfigure Client OVPN"
         echo -e "  ${CYAN}[3]${RESET}  Reconfigure RSA Keys"
@@ -141,11 +141,11 @@ while true; do
         echo -e "  ${RED}[11]${RESET} Uninstall OpenVPN"
     else
         echo -e "  ${YELLOW}OpenVPN is not installed.${RESET}"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Install OpenVPN"
     fi
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1)  is_installed_ovpn && view_client || install_openvpn ;;

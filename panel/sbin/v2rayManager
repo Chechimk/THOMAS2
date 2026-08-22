@@ -172,7 +172,7 @@ select_protocol() {
     echo -e "  ${CYAN}[2]${RESET}  VLESS"
     echo -e "  ${CYAN}[3]${RESET}  VLESS + XTLS Vision  ${DIM}(Reality recommended)${RESET}"
     echo -e "  ${CYAN}[4]${RESET}  Trojan"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Protocol: " p
     case "$p" in
         1) PROTO="vmess"      ;;
@@ -190,7 +190,7 @@ select_transport() {
     echo -e "  ${CYAN}[3]${RESET}  gRPC               ${DIM}— low-latency, multiplexed${RESET}"
     echo -e "  ${CYAN}[4]${RESET}  TCP + HTTP obfs    ${DIM}— lightweight obfuscation${RESET}"
     echo -e "  ${CYAN}[5]${RESET}  HTTPUpgrade        ${DIM}— CDN-friendly HTTP upgrade${RESET}"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Transport: " t
     local rpath="/$(openssl rand -hex 4)/$(openssl rand -hex 4)"
     local rsvc; rsvc="$(openssl rand -hex 6)Service"
@@ -222,7 +222,7 @@ select_security() {
     echo -e "  ${CYAN}[1]${RESET}  None     ${DIM}— use behind CDN / Nginx TLS termination${RESET}"
     echo -e "  ${CYAN}[2]${RESET}  TLS      ${DIM}— direct TLS (requires cert)${RESET}"
     echo -e "  ${CYAN}[3]${RESET}  Reality  ${DIM}— VLESS only, strongest anti-detection${RESET}"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Security: " s
     case "$s" in
         1) SECURITY_EXTRA="" ;;
@@ -297,7 +297,7 @@ add_protocol() {
     systemctl restart "$bin_type" &>/dev/null || true
 
     echo ""
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     ok "Protocol configured!"
     printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Protocol:"  "$PROTO"
     printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Transport:" "$TRANSPORT"
@@ -305,7 +305,7 @@ add_protocol() {
     printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "UUID/Pass:" "$uuid"
     printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Path/Svc:"  "$PATH_OR_SVC"
     printf "  ${DIM}%-14s${RESET}${WHITE}%s${RESET}\n" "Config:"    "$outfile"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     press_enter
 }
 
@@ -334,7 +334,7 @@ manager_ui() {
         printf "  ${DIM}STATUS:   ${RESET}%s\n" "$(service_status "$bin_type")"
         printf "  ${DIM}INBOUNDS: ${RESET}${WHITE}%s${RESET}\n" \
             "$(ls "${conf_dir}"/*.json 2>/dev/null | wc -l) configured"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         echo -e "  ${CYAN}[1]${RESET}  Add Protocol  ${DIM}(WS / XHTTP / gRPC / TCP / HTTPUpgrade)${RESET}"
         echo -e "  ${CYAN}[2]${RESET}  Remove Protocol"
         echo -e "  ${CYAN}[3]${RESET}  List Protocols"
@@ -348,7 +348,7 @@ manager_ui() {
         echo -e "  ${CYAN}[11]${RESET} Install ${bin_type^}"
         echo -e "  ${RED}[12]${RESET} Uninstall ${bin_type^}"
         echo -e "  ${YELLOW}[0]${RESET}  Back"
-        echo -e "${CYAN}$(line)${RESET}"
+        line
         read -rp "  Enter an option: " opt
         local confs f sel
         case "$opt" in
@@ -409,7 +409,7 @@ while true; do
     echo -e "  ${CYAN}[1]${RESET}  V2Ray Manager"
     echo -e "  ${CYAN}[2]${RESET}  Xray Manager  ${DIM}(XHTTP, Reality, XTLS Vision)${RESET}"
     echo -e "  ${YELLOW}[0]${RESET}  Back"
-    echo -e "${CYAN}$(line)${RESET}"
+    line
     read -rp "  Enter an option: " opt
     case "$opt" in
         1) mkdir -p "$V2_CONF_DIR" ; manager_ui "v2ray" "$V2_CONF_DIR" ;;
