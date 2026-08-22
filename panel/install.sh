@@ -50,64 +50,73 @@ read -rp "  Continue with installation? [Y/N]: " ans
 [[ "${ans^^}" != "Y" ]] && exit 0
 
 # ── Dependencies ─────────────────────────────────────────────────
-info "Updating packages..."
+info "Updating package lists..."
 apt-get update -qq
+apt-get upgrade -y -qq 2>/dev/null || true
 
-info "Installing core dependencies..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+# Install everything in one shot — faster, avoids mid-install failures
+info "Installing all required packages..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
     git curl wget nano unzip tar \
-    || err "Failed to install base tools."
-
-info "Installing network tools..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     openssl ca-certificates socat \
-    net-tools iproute2 iptables nftables \
-    dnsutils bind9-dnsutils netcat-openbsd \
-    || err "Failed to install network tools."
-
-info "Installing system tools..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    net-tools iproute2 iptables \
+    dnsutils netcat-openbsd \
     lsb-release gnupg software-properties-common \
     cron uuid-runtime procps htop \
     libcurl4-openssl-dev libstdc++6 \
-    || err "Failed to install system tools."
-
-info "Installing Python and pip..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    python3 python3-pip python3-venv \
-    || err "Failed to install Python."
-
-info "Installing SSH tools..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    python3 python3-pip python3-venv python3-full \
     openssh-server dropbear \
-    || err "Failed to install SSH tools."
-
-info "Installing firewall and security tools..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    fail2ban iptables-persistent \
-    || true  # non-fatal — user can install manually
-
-info "Installing VPN dependencies..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    fail2ban \
     openvpn easy-rsa \
-    || true
-
-info "Installing proxy tools..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     stunnel4 squid \
-    || true
-
-info "Installing WireGuard..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     wireguard wireguard-tools \
-    || true
+    jq \
+    2>&1 | grep -E "^(Err|E:|dpkg)" || true
 
-info "Installing jq for JSON parsing..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq || true
+# Verify critical binaries are working
+_check() {
+    local cmd="$1" pkg="${2:-$1}"
+    if command -v "$cmd" &>/dev/null; then
+        ok "$cmd ready"
+    else
+        warn "$cmd not found — retrying install of $pkg..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" &>/dev/null \
+            && ok "$cmd installed" || warn "$cmd could not be installed"
+    fi
+}
 
-# pip packages needed by some modules
+info "Verifying critical tools..."
+_check python3
+_check pip3       python3-pip
+_check git
+_check curl
+_check wget
+_check openssl
+_check ss         iproute2
+_check iptables
+_check socat
+_check jq
+_check uuidgen    uuid-runtime
+
+# Fix pip on Ubuntu 22.04+ (PEP 668 — externally managed environment)
+info "Configuring pip..."
+PIP_CONF="$HOME/.config/pip/pip.conf"
+mkdir -p "$(dirname "$PIP_CONF")"
+cat > "$PIP_CONF" <<'PIPCONF'
+[global]
+break-system-packages = true
+PIPCONF
+
+# Install required Python packages
 info "Installing Python packages..."
-pip3 install --quiet requests colorama PySocks 2>/dev/null || true
+pip3 install --quiet --break-system-packages \
+    requests colorama PySocks 2>/dev/null \
+    && ok "Python packages ready" \
+    || warn "Some Python packages failed — will not affect core panel"
+
+# Enable cron service
+systemctl enable cron 2>/dev/null || systemctl enable crond 2>/dev/null || true
+systemctl start  cron 2>/dev/null || systemctl start  crond 2>/dev/null || true
 
 # ── Clone repo ───────────────────────────────────────────────────
 info "Cloning panel from GitHub..."
@@ -132,19 +141,6 @@ chmod +x "$PANEL_DIR/isRoot"
 find "$SBIN_DIR" -type f -exec chmod +x {} \;
 
 rm -rf "$TMP_DIR"
-
-# ── Verify critical tools ────────────────────────────────────────
-info "Verifying installation..."
-MISSING=()
-for cmd in python3 pip3 curl wget git openssl nano iptables ss; do
-    command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
-done
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-    warn "Some tools could not be verified: ${MISSING[*]}"
-    warn "The panel may have limited functionality."
-else
-    ok "All critical tools verified."
-fi
 
 # ── System-wide commands ─────────────────────────────────────────
 ln -sf "$PANEL_DIR/menu"        /usr/local/bin/menu
