@@ -136,59 +136,148 @@ select_security() {
     esac
 }
 
-# ── Config writer — builds valid JSON directly ────────────────────
+# ── Config writer — uses env vars so Python never sees raw bash strings ──
 write_conf() {
     local conf_dir="$1" port="$2" uuid="$3"
     mkdir -p "$conf_dir" /var/log/xray /var/log/v2ray
     local outfile="${conf_dir}/${PROTO}_${TRANSPORT}_${port}.json"
 
-    # Settings block per protocol
-    local settings
+    # Export everything as env vars — single-quoted heredoc prevents bash expansion inside Python
+    export _OUTFILE="$outfile"
+    export _PORT="$port"
+    export _PROTO="${PROTO%%-*}"
+    export _UUID="$uuid"
+    export _FLOW=""
+    export _DECRYPTION=""
+    export _TRANSPORT="$TRANSPORT"
+    export _PATH="$PATH_OR_SVC"
+    export _SECURITY="${SECURITY:-none}"
+    export _TLS_CERT="$TLS_CERT"
+    export _TLS_KEY="$TLS_KEY"
+    export _REALITY_DEST="$REALITY_DEST"
+    export _REALITY_SNI="$REALITY_SNI"
+    export _REALITY_PRIV="$REALITY_PRIV"
+    export _REALITY_SID="$REALITY_SID"
+
     case "$PROTO" in
-        vmess)
-            settings='"clients":[{"id":"'"$uuid"'","alterId":0}]' ;;
-        vless)
-            settings='"clients":[{"id":"'"$uuid"'","flow":""}],"decryption":"none"' ;;
-        vless-xtls)
-            settings='"clients":[{"id":"'"$uuid"'","flow":"xtls-rprx-vision"}],"decryption":"none"' ;;
-        trojan)
-            settings='"clients":[{"password":"'"$uuid"'"}]' ;;
+        vmess)      ;;
+        vless)      export _DECRYPTION="none" ;;
+        vless-xtls) export _FLOW="xtls-rprx-vision" ; export _DECRYPTION="none" ;;
+        trojan)     ;;
     esac
 
-    # Security block (goes inside streamSettings)
-    local sec_block=""
-    case "$SECURITY" in
-        tls) sec_block=$(printf '"security":"tls","tlsSettings":{"certificates":[{"certificateFile":"%s","keyFile":"%s"}],"minVersion":"1.2","fingerprint":"chrome"},' "$TLS_CERT" "$TLS_KEY") ;;
-        reality) sec_block=$(printf '"security":"reality","realitySettings":{"dest":"%s:443","serverNames":["%s"],"privateKey":"%s","shortIds":["%s"],"fingerprint":"chrome","spiderX":"/"},' \
-            "$REALITY_DEST" "$REALITY_SNI" "$REALITY_PRIV" "$REALITY_SID") ;;
-    esac
+    python3 << 'PYEOF'
+import json, os
 
-    # Transport block (goes inside streamSettings)
-    local net_block=""
-    case "$TRANSPORT" in
-        ws) net_block=$(printf '"wsSettings":{"path":"%s","headers":{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)","Sec-WebSocket-Protocol":"chat","Cache-Control":"no-cache"}}' "$PATH_OR_SVC") ;;
-        xhttp) net_block=$(printf '"xhttpSettings":{"path":"%s","mode":"stream-up","xPaddingBytes":"100-1000","scMaxEachPostBytes":"1000000-2000000","scMinPostsIntervalMs":"10-50","scStreamUpServerSecs":"5-15","noGRPCHeader":false,"extra":{"headers":{"Accept":"application/json, */*","Content-Type":"application/octet-stream"}}}' "$PATH_OR_SVC") ;;
-        grpc) net_block=$(printf '"grpcSettings":{"serviceName":"%s","multiMode":true,"idle_timeout":60,"health_check_timeout":20,"initial_windows_size":35536}' "$PATH_OR_SVC") ;;
-        tcp)  net_block='"tcpSettings":{"header":{"type":"http","request":{"version":"1.1","method":"GET","path":["/"],"headers":{"Host":["www.cloudflare.com"],"User-Agent":["Mozilla/5.0"],"Connection":["keep-alive"]}}}}' ;;
-        httpupgrade) net_block=$(printf '"httpupgradeSettings":{"path":"%s","headers":{"User-Agent":"Mozilla/5.0"}}' "$PATH_OR_SVC") ;;
-    esac
+proto    = os.environ["_PROTO"]
+port     = int(os.environ["_PORT"])
+uuid_val = os.environ["_UUID"]
+flow     = os.environ["_FLOW"]
+decrypt  = os.environ["_DECRYPTION"]
+network  = os.environ["_TRANSPORT"]
+path_svc = os.environ["_PATH"]
+security = os.environ["_SECURITY"]
+outfile  = os.environ["_OUTFILE"]
 
-    # Build complete config JSON
-    python3 - <<PYEOF
-import json
+# Settings block
+if proto == "vmess":
+    settings = {"clients": [{"id": uuid_val, "alterId": 0}]}
+elif proto == "trojan":
+    settings = {"clients": [{"password": uuid_val}]}
+else:
+    client = {"id": uuid_val}
+    if flow:
+        client["flow"] = flow
+    settings = {"clients": [client], "decryption": decrypt}
+
+# Stream settings — security goes at top level of streamSettings
+stream = {"network": network}
+
+if security == "tls":
+    stream["security"] = "tls"
+    stream["tlsSettings"] = {
+        "certificates": [{"certificateFile": os.environ["_TLS_CERT"],
+                          "keyFile":         os.environ["_TLS_KEY"]}],
+        "minVersion": "1.2",
+        "fingerprint": "chrome"
+    }
+elif security == "reality":
+    stream["security"] = "reality"
+    stream["realitySettings"] = {
+        "dest":        os.environ["_REALITY_DEST"] + ":443",
+        "serverNames": [os.environ["_REALITY_SNI"]],
+        "privateKey":  os.environ["_REALITY_PRIV"],
+        "shortIds":    [os.environ["_REALITY_SID"]],
+        "fingerprint": "chrome",
+        "spiderX":     "/"
+    }
+
+# Transport-specific settings block
+if network == "ws":
+    stream["wsSettings"] = {
+        "path": path_svc,
+        "headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Sec-WebSocket-Protocol": "chat",
+            "Cache-Control": "no-cache"
+        }
+    }
+elif network == "xhttp":
+    stream["xhttpSettings"] = {
+        "path": path_svc,
+        "mode": "stream-up",
+        "xPaddingBytes": "100-1000",
+        "scMaxEachPostBytes": "1000000-2000000",
+        "scMinPostsIntervalMs": "10-50",
+        "scStreamUpServerSecs": "5-15",
+        "noGRPCHeader": False,
+        "extra": {"headers": {
+            "Accept": "application/json, */*",
+            "Content-Type": "application/octet-stream"
+        }}
+    }
+elif network == "grpc":
+    stream["grpcSettings"] = {
+        "serviceName": path_svc,
+        "multiMode": True,
+        "idle_timeout": 60,
+        "health_check_timeout": 20,
+        "initial_windows_size": 35536
+    }
+elif network == "tcp":
+    stream["tcpSettings"] = {
+        "header": {
+            "type": "http",
+            "request": {
+                "version": "1.1", "method": "GET", "path": ["/"],
+                "headers": {
+                    "Host": ["www.cloudflare.com"],
+                    "User-Agent": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64)"],
+                    "Connection": ["keep-alive"]
+                }
+            }
+        }
+    }
+elif network == "httpupgrade":
+    stream["httpupgradeSettings"] = {
+        "path": path_svc,
+        "headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    }
+
 config = {
     "inbounds": [{
-        "port": ${port},
-        "listen": "0.0.0.0",
-        "protocol": "${PROTO%%-*}",
-        "settings": json.loads("{" + """${settings}""" + "}"),
-        "streamSettings": json.loads("{" + """${sec_block}"network":"${TRANSPORT}",${net_block}""" + "}"),
-        "sniffing": {"enabled": True, "destOverride": ["http","tls","quic"]}
+        "port":           port,
+        "listen":         "0.0.0.0",
+        "protocol":       proto,
+        "settings":       settings,
+        "streamSettings": stream,
+        "sniffing":       {"enabled": True, "destOverride": ["http","tls","quic"]}
     }]
 }
-with open("${outfile}", "w") as f:
+
+with open(outfile, "w") as f:
     json.dump(config, f, indent=2)
-print("${outfile}")
+print(outfile)
 PYEOF
 }
 
