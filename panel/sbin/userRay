@@ -57,38 +57,86 @@ import json
 d=json.load(open('$conf_file'))
 ss=d['inbounds'][0].get('streamSettings',{})
 net=ss.get('network','tcp')
-print(ss.get(net+'Settings',{}).get('path',''))
+print(ss.get(net+'Settings',{}).get('path','').lstrip('/'))
 " 2>/dev/null)
     security=$( python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0].get('streamSettings',{}).get('security','none'))" 2>/dev/null)
 
     local host="$SERVER_IP"
 
-    case "$proto" in
-        vless)
-            local flow
-            flow=$(python3 -c "import json; d=json.load(open('$conf_file')); print(d['inbounds'][0]['settings']['clients'][0].get('flow',''))" 2>/dev/null)
-            local params="encryption=none&type=${network}&security=${security}"
-            [[ -n "$path_val" ]] && params+="&path=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$path_val'))")"
-            [[ -n "$flow" ]]     && params+="&flow=${flow}"
-            echo "vless://${uuid}@${host}:${port}?${params}#${name}"
-            ;;
-        vmess)
-            local json_b64
-            json_b64=$(python3 -c "
-import json, base64
-obj = {'v':'2','ps':'$name','add':'$host','port':'$port',
-       'id':'$uuid','aid':'0','net':'$network',
-       'type':'none','host':'','path':'$path_val','tls':'$security'}
-print(base64.b64encode(json.dumps(obj).encode()).decode())
-")
-            echo "vmess://${json_b64}"
-            ;;
-        trojan)
-            local params="type=${network}&security=${security}"
-            [[ -n "$path_val" ]] && params+="&path=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$path_val'))")"
-            echo "trojan://${uuid}@${host}:${port}?${params}#${name}"
-            ;;
-    esac
+    # Use Python with env vars to avoid any quoting issues in URL construction
+    export _UUID="$uuid" _HOST="$host" _PORT="$port" _PROTO="$proto"
+    export _NETWORK="$network" _PATH="$path_val" _SECURITY="${security:-none}" _NAME="$name"
+    export _CONF_GEN="$conf_file"
+
+    python3 << 'GENEOF'
+import json, os, base64, urllib.parse
+
+uuid     = os.environ["_UUID"]
+host     = os.environ["_HOST"]
+port     = os.environ["_PORT"]
+proto    = os.environ["_PROTO"]
+network  = os.environ["_NETWORK"]
+path_val = os.environ["_PATH"]
+security = os.environ["_SECURITY"]
+name     = os.environ["_NAME"]
+conf     = os.environ["_CONF_GEN"]
+
+# Read extra fields from config
+try:
+    d   = json.load(open(conf))
+    ss  = d["inbounds"][0].get("streamSettings", {})
+    cli = d["inbounds"][0]["settings"]["clients"]
+    # get flow for this specific uuid
+    flow = next((c.get("flow","") for c in cli if c.get("id") == uuid or c.get("password") == uuid), "")
+    sni  = ss.get("tlsSettings",  ss.get("realitySettings", {})).get("serverNames", [""])[0]
+    pbk  = ss.get("realitySettings", {}).get("publicKey", "")   # not stored server-side, skip
+    sid  = ss.get("realitySettings", {}).get("shortIds", [""])[0]
+except Exception:
+    flow = sni = pbk = sid = ""
+
+def make_params(pairs):
+    return "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}" for k,v in pairs if v)
+
+if proto == "vless":
+    params = [
+        ("encryption", "none"),
+        ("type",        network),
+        ("path",        path_val),
+        ("flow",        flow),
+    ]
+    if security in ("tls", "reality"):
+        params += [
+            ("security", security),
+            ("alpn",     "h2"),
+            ("fp",       "chrome"),
+            ("sni",      sni),
+        ]
+        if security == "reality":
+            params += [("sid", sid)]
+    else:
+        params += [("alpn", "h2"), ("fp", "chrome")]
+    print(f"vless://{uuid}@{host}:{port}?{make_params(params)}#{urllib.parse.quote(name)}")
+
+elif proto == "vmess":
+    obj = {"v":"2","ps":name,"add":host,"port":port,"id":uuid,
+           "aid":"0","net":network,"type":"none","host":"",
+           "path":"/"+path_val if path_val else "","tls": security if security != "none" else "",
+           "alpn":"h2","fp":"chrome"}
+    if sni: obj["sni"] = sni
+    b64 = base64.b64encode(json.dumps(obj, separators=(',',':')).encode()).decode()
+    print(f"vmess://{b64}")
+
+elif proto == "trojan":
+    params = [
+        ("type",     network),
+        ("path",     path_val),
+        ("alpn",     "h2"),
+        ("fp",       "chrome"),
+    ]
+    if security in ("tls", "reality"):
+        params += [("security", security), ("sni", sni)]
+    print(f"trojan://{uuid}@{host}:{port}?{make_params(params)}#{urllib.parse.quote(name)}")
+GENEOF
 }
 
 _add_client_to_conf() {
