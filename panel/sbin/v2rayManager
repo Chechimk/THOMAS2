@@ -9,350 +9,407 @@ XR_BIN="/usr/local/bin/xray"
 XR_CONF_DIR="${XR_DIR}/conf"
 V2_CONF_DIR="${V2_DIR}/conf"
 
-# Globals populated by selector functions
-PROTO="" TRANSPORT="" PATH_OR_SVC="" SECURITY=""
-TLS_CERT="" TLS_KEY=""
-REALITY_PRIV="" REALITY_PUB="" REALITY_SID="" REALITY_DEST="" REALITY_SNI=""
+WZ_BIN="" WZ_PORT="" WZ_PROTO="" WZ_TRANSPORT="" WZ_PATH="" WZ_SECURITY=""
+WZ_TLS_CERT="" WZ_TLS_KEY=""
+WZ_REALITY_DEST="" WZ_REALITY_SNI="" WZ_REALITY_PRIV="" WZ_REALITY_PUB="" WZ_REALITY_SID=""
+WZ_SS_METHOD="aes-256-gcm"
+WZ_UUID="" WZ_PASSWORD=""
 
-is_v2ray_installed() { [[ -f "$V2_BIN" ]]; }
-is_xray_installed()  { [[ -f "$XR_BIN" ]]; }
+is_xray_installed() { [[ -f "$XR_BIN" ]]; }
+is_v2ray_installed(){ [[ -f "$V2_BIN" ]]; }
 
-download_v2ray() {
-    info "Downloading V2Ray..."
-    bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh) \
-        && ok "V2Ray installed." || { err "Download failed." ; press_enter ; return 1; }
-}
-
-download_xray() {
-    info "Downloading Xray..."
-    bash <(curl -L https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh) \
-        && ok "Xray installed." || { err "Download failed." ; press_enter ; return 1; }
-    _configure_xray_service
-}
-
-# Point Xray service at conf/ directory so multiple inbound files work
-_configure_xray_service() {
+_setup_xray_service() {
     local svc="/etc/systemd/system/xray.service"
-    [[ ! -f "$svc" ]] && { warn "Xray service file not found. Install Xray first." ; return; }
+    local dropin_dir="/etc/systemd/system/xray.service.d"
+    rm -f "${dropin_dir}/10-donot_touch_single_conf.conf"
+    rmdir "$dropin_dir" 2>/dev/null || true
+    [[ ! -f "$svc" ]] && { warn "Xray service not found. Install Xray first." ; return 1; }
     sed -i "s|ExecStart=.*|ExecStart=${XR_BIN} run -confdir ${XR_CONF_DIR}|" "$svc"
     mkdir -p "$XR_CONF_DIR" /var/log/xray
-    # Base config: logging + outbounds (inbounds come from conf/ files)
     cat > "${XR_DIR}/config.json" <<'BASEJSON'
 {
-  "log": {
-    "loglevel": "warning",
-    "access": "/var/log/xray/access.log",
-    "error":  "/var/log/xray/error.log"
-  },
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "block" }
-  ]
+  "log": { "loglevel": "warning", "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log" },
+  "outbounds": [{ "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "block" }]
 }
 BASEJSON
     systemctl daemon-reload
-    systemctl restart xray &>/dev/null || true
-    ok "Xray service configured for conf/ directory."
+    systemctl enable xray &>/dev/null
+    systemctl restart xray
+    systemctl is-active --quiet xray && ok "Xray service started (conf/ mode)." || {
+        err "Xray failed:" ; journalctl -u xray --no-pager | tail -5
+    }
 }
 
-# ── Protocol selector ─────────────────────────────────────────────
-select_protocol() {
+install_xray() {
+    info "Installing Xray..."
+    bash <(curl -L https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh) \
+        && { ok "Xray installed." ; _setup_xray_service; } || err "Failed."
+    press_enter
+}
+
+install_v2ray() {
+    info "Installing V2Ray..."
+    bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh) \
+        && ok "V2Ray installed." || err "Failed."
+    press_enter
+}
+
+wz_port() {
+    while true; do
+        read -rp "  ${CYAN}Listen port: ${RESET}" WZ_PORT
+        [[ "$WZ_PORT" =~ ^[0-9]+$ ]] && (( WZ_PORT >= 1 && WZ_PORT <= 65535 )) && break
+        warn "Enter a valid port (1-65535)."
+    done
+}
+
+wz_protocol() {
     line_sep
     echo -e "  ${BOLD}${WHITE}PROTOCOL${RESET}"
     line_sep
-    echo -e "  ${CYAN}[1]${RESET}  VMess"
-    echo -e "  ${CYAN}[2]${RESET}  VLESS"
-    echo -e "  ${CYAN}[3]${RESET}  VLESS + XTLS Vision  ${DIM}(use with Reality)${RESET}"
-    echo -e "  ${CYAN}[4]${RESET}  Trojan"
+    echo -e "  ${CYAN}[1]${RESET}  VLESS         ${DIM}recommended for Xray${RESET}"
+    echo -e "  ${CYAN}[2]${RESET}  VMess"
+    echo -e "  ${CYAN}[3]${RESET}  Trojan"
+    echo -e "  ${CYAN}[4]${RESET}  SOCKS5"
+    echo -e "  ${CYAN}[5]${RESET}  Shadowsocks"
     line_sep
-    read -rp "  Protocol: " p
+    read -rp "  Protocol [1-5]: " p
     case "$p" in
-        1) PROTO="vmess"      ;;
-        2) PROTO="vless"      ;;
-        3) PROTO="vless-xtls" ;;
-        4) PROTO="trojan"     ;;
-        *) err "Invalid protocol." ; return 1 ;;
+        1) WZ_PROTO="vless" ;; 2) WZ_PROTO="vmess" ;; 3) WZ_PROTO="trojan" ;;
+        4) WZ_PROTO="socks" ;; 5) WZ_PROTO="shadowsocks" ;;
+        *) err "Invalid." ; return 1 ;;
     esac
 }
 
-# ── Transport selector ────────────────────────────────────────────
-select_transport() {
+wz_transport() {
+    case "$WZ_PROTO" in socks|shadowsocks) WZ_TRANSPORT="tcp" ; return ;; esac
     line_sep
     echo -e "  ${BOLD}${WHITE}TRANSPORT${RESET}"
     line_sep
-    echo -e "  ${CYAN}[1]${RESET}  WebSocket (WS)       ${DIM}CDN-compatible${RESET}"
-    echo -e "  ${CYAN}[2]${RESET}  XHTTP (stream-up)    ${DIM}anti-fingerprint, REST mimic${RESET}"
-    echo -e "  ${CYAN}[3]${RESET}  gRPC                 ${DIM}low-latency, multiplexed${RESET}"
-    echo -e "  ${CYAN}[4]${RESET}  TCP + HTTP obfs      ${DIM}lightweight${RESET}"
-    echo -e "  ${CYAN}[5]${RESET}  HTTPUpgrade          ${DIM}CDN-friendly${RESET}"
+    echo -e "  ${CYAN}[1]${RESET}  TCP"
+    echo -e "  ${CYAN}[2]${RESET}  WebSocket (WS)"
+    echo -e "  ${CYAN}[3]${RESET}  gRPC"
+    [[ "$WZ_BIN" == "xray" ]] && echo -e "  ${CYAN}[4]${RESET}  XHTTP (stream-up)"
+    [[ "$WZ_BIN" == "xray" ]] && echo -e "  ${CYAN}[5]${RESET}  HTTPUpgrade"
     line_sep
     read -rp "  Transport: " t
-    local rpath="/$(openssl rand -hex 4)/$(openssl rand -hex 4)"
-    local rsvc; rsvc="$(openssl rand -hex 6)Svc"
     case "$t" in
-        1) TRANSPORT="ws"
-           read -rp "  ${CYAN}Path (Enter=random): ${RESET}" _p
-           PATH_OR_SVC="${_p:-/$(openssl rand -hex 6)}" ;;
-        2) TRANSPORT="xhttp"
-           read -rp "  ${CYAN}API path (Enter=random): ${RESET}" _p
-           PATH_OR_SVC="${_p:-/api/v1/$(openssl rand -hex 4)}" ;;
-        3) TRANSPORT="grpc"
-           read -rp "  ${CYAN}Service name (Enter=random): ${RESET}" _p
-           PATH_OR_SVC="${_p:-$rsvc}" ;;
-        4) TRANSPORT="tcp" ; PATH_OR_SVC="-" ;;
-        5) TRANSPORT="httpupgrade"
-           read -rp "  ${CYAN}Path (Enter=random): ${RESET}" _p
-           PATH_OR_SVC="${_p:-$rpath}" ;;
-        *) err "Invalid transport." ; return 1 ;;
+        1) WZ_TRANSPORT="tcp" ;; 2) WZ_TRANSPORT="ws" ;; 3) WZ_TRANSPORT="grpc" ;;
+        4) [[ "$WZ_BIN" == "xray" ]] && WZ_TRANSPORT="xhttp" || { err "XHTTP requires Xray." ; return 1; } ;;
+        5) [[ "$WZ_BIN" == "xray" ]] && WZ_TRANSPORT="httpupgrade" || { err "HTTPUpgrade requires Xray." ; return 1; } ;;
+        *) err "Invalid." ; return 1 ;;
     esac
 }
 
-# ── Security selector ─────────────────────────────────────────────
-select_security() {
+wz_path() {
+    case "$WZ_TRANSPORT" in tcp) WZ_PATH="" ; return ;; esac
+    local rval; rval="$(openssl rand -hex 8)"
+    [[ "$WZ_TRANSPORT" == "grpc" ]] && rval="${rval}Svc"
+    local prompt="Path (Enter=random '${rval}')"
+    [[ "$WZ_TRANSPORT" == "grpc" ]] && prompt="Service name (Enter=random '${rval}')"
     line_sep
-    echo -e "  ${BOLD}${WHITE}SECURITY${RESET}"
+    read -rp "  ${CYAN}${prompt}: ${RESET}" _p
+    WZ_PATH="${_p:-$rval}"
+    WZ_PATH="${WZ_PATH#/}"
+}
+
+wz_security() {
     line_sep
-    echo -e "  ${CYAN}[1]${RESET}  None     ${DIM}behind CDN / Nginx TLS termination${RESET}"
-    echo -e "  ${CYAN}[2]${RESET}  TLS      ${DIM}direct TLS, requires cert/key${RESET}"
-    echo -e "  ${CYAN}[3]${RESET}  Reality  ${DIM}VLESS only, strongest anti-detection${RESET}"
+    echo -e "  ${BOLD}${WHITE}TLS / SECURITY${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[1]${RESET}  None    ${DIM}no TLS — behind CDN or Nginx${RESET}"
+    echo -e "  ${CYAN}[2]${RESET}  TLS     ${DIM}direct, requires cert files${RESET}"
+    [[ "$WZ_BIN" == "xray" && "$WZ_PROTO" == "vless"* ]] && \
+        echo -e "  ${CYAN}[3]${RESET}  Reality ${DIM}strongest — VLESS + Xray only${RESET}"
     line_sep
     read -rp "  Security: " s
     case "$s" in
-        1) SECURITY="none" ;;
-        2) SECURITY="tls"
-           read -rp "  ${CYAN}Cert file (fullchain.pem): ${RESET}" TLS_CERT
-           read -rp "  ${CYAN}Key file (privkey.pem):   ${RESET}" TLS_KEY ;;
-        3) SECURITY="reality"
-           [[ "$PROTO" != "vless"* ]] && { warn "Reality requires VLESS protocol." ; return 1; }
-           read -rp "  ${CYAN}Destination host (e.g. www.microsoft.com): ${RESET}" REALITY_DEST
-           read -rp "  ${CYAN}Server name / SNI: ${RESET}" REALITY_SNI
-           REALITY_DEST="${REALITY_DEST:-www.microsoft.com}"
-           REALITY_SNI="${REALITY_SNI:-www.microsoft.com}"
-           local keypair; keypair=$("$XR_BIN" x25519 2>/dev/null)
-           REALITY_PRIV=$(echo "$keypair" | awk '/Private/{print $3}')
-           REALITY_PUB=$(echo "$keypair"  | awk '/Public/{print $3}')
-           REALITY_SID=$(openssl rand -hex 4) ;;
-        *) err "Invalid security." ; return 1 ;;
+        1) WZ_SECURITY="none" ;;
+        2) WZ_SECURITY="tls"
+           read -rp "  ${CYAN}Cert file (fullchain.pem): ${RESET}" WZ_TLS_CERT
+           read -rp "  ${CYAN}Key file  (privkey.pem):   ${RESET}" WZ_TLS_KEY ;;
+        3) if [[ "$WZ_BIN" == "xray" && "$WZ_PROTO" == "vless"* ]]; then
+               WZ_SECURITY="reality"
+               read -rp "  ${CYAN}Destination (e.g. www.microsoft.com): ${RESET}" WZ_REALITY_DEST
+               read -rp "  ${CYAN}SNI (same as destination): ${RESET}" WZ_REALITY_SNI
+               WZ_REALITY_DEST="${WZ_REALITY_DEST:-www.microsoft.com}"
+               WZ_REALITY_SNI="${WZ_REALITY_SNI:-www.microsoft.com}"
+               local kp; kp=$("$XR_BIN" x25519 2>/dev/null)
+               WZ_REALITY_PRIV=$(echo "$kp" | awk '/Private/{print $3}')
+               WZ_REALITY_PUB=$( echo "$kp" | awk '/Public/{print $3}')
+               WZ_REALITY_SID=$(openssl rand -hex 4)
+           else err "Reality requires Xray + VLESS." ; return 1 ; fi ;;
+        *) err "Invalid." ; return 1 ;;
     esac
 }
 
-# ── Config writer — builds valid JSON directly ────────────────────
-write_conf() {
-    local conf_dir="$1" port="$2" uuid="$3"
+wz_ss_method() {
+    line_sep ; echo -e "  ${BOLD}${WHITE}SHADOWSOCKS METHOD${RESET}" ; line_sep
+    echo -e "  ${CYAN}[1]${RESET}  aes-256-gcm"
+    echo -e "  ${CYAN}[2]${RESET}  chacha20-poly1305"
+    [[ "$WZ_BIN" == "xray" ]] && echo -e "  ${CYAN}[3]${RESET}  2022-blake3-aes-256-gcm"
+    [[ "$WZ_BIN" == "xray" ]] && echo -e "  ${CYAN}[4]${RESET}  2022-blake3-chacha20-poly1305"
+    line_sep
+    read -rp "  Method: " m
+    case "$m" in
+        1) WZ_SS_METHOD="aes-256-gcm" ;; 2) WZ_SS_METHOD="chacha20-poly1305" ;;
+        3) WZ_SS_METHOD="2022-blake3-aes-256-gcm" ;;
+        4) WZ_SS_METHOD="2022-blake3-chacha20-poly1305" ;;
+        *) WZ_SS_METHOD="aes-256-gcm" ;;
+    esac
+}
+
+wz_review() {
+    echo ""
+    line_top ; _center "REVIEW CONFIGURATION" ; line_mid
+    printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "Core:"      "$WZ_BIN"
+    printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "Protocol:"  "$WZ_PROTO"
+    printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "Port:"      "$WZ_PORT"
+    printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "Transport:" "$WZ_TRANSPORT"
+    [[ -n "$WZ_PATH" ]] && printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${YELLOW}%-44s${RESET}${RED}║${RESET}\n" "Path/Svc:"  "$WZ_PATH"
+    printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "Security:"  "$WZ_SECURITY"
+    [[ "$WZ_SECURITY" == "reality" ]] && {
+        printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "SNI:"      "$WZ_REALITY_SNI"
+        printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "PubKey:"   "$WZ_REALITY_PUB"
+        printf "${RED}║${RESET}  ${DIM}%-14s${RESET}${WHITE}%-44s${RESET}${RED}║${RESET}\n" "ShortID:"  "$WZ_REALITY_SID"
+    }
+    line_mid
+    echo -e "  ${CYAN}[1]>${RESET}  ${BOLD}${BGREEN}APPLY${RESET}"
+    echo -e "  ${BRED}[0]>${RESET}  ${BOLD}${WHITE}CANCEL${RESET}"
+    line_bot ; echo ""
+    read -rp "  Choice: " ch
+    [[ "$ch" == "1" ]]
+}
+
+write_inbound_conf() {
+    local conf_dir="$1"
     mkdir -p "$conf_dir" /var/log/xray /var/log/v2ray
-    local outfile="${conf_dir}/${PROTO}_${TRANSPORT}_${port}.json"
+    WZ_UUID=$(cat /proc/sys/kernel/random/uuid)
+    WZ_PASSWORD=$(openssl rand -base64 16)
+    local outfile="${conf_dir}/${WZ_PROTO}_${WZ_TRANSPORT}_${WZ_PORT}.json"
 
-    # Settings block per protocol
-    local settings
-    case "$PROTO" in
-        vmess)
-            settings='"clients":[{"id":"'"$uuid"'","alterId":0}]' ;;
-        vless)
-            settings='"clients":[{"id":"'"$uuid"'","flow":""}],"decryption":"none"' ;;
-        vless-xtls)
-            settings='"clients":[{"id":"'"$uuid"'","flow":"xtls-rprx-vision"}],"decryption":"none"' ;;
-        trojan)
-            settings='"clients":[{"password":"'"$uuid"'"}]' ;;
-    esac
+    export _OUT="$outfile" _PORT="$WZ_PORT" _PROTO="$WZ_PROTO"
+    export _TRANSPORT="$WZ_TRANSPORT" _PATH="$WZ_PATH" _SECURITY="$WZ_SECURITY"
+    export _TLS_CERT="$WZ_TLS_CERT" _TLS_KEY="$WZ_TLS_KEY"
+    export _R_DEST="$WZ_REALITY_DEST" _R_SNI="$WZ_REALITY_SNI"
+    export _R_PRIV="$WZ_REALITY_PRIV" _R_SID="$WZ_REALITY_SID"
+    export _UUID="$WZ_UUID" _PASS="$WZ_PASSWORD" _SS_METHOD="$WZ_SS_METHOD"
+    export _FLOW="" ; [[ "$WZ_SECURITY" == "reality" ]] && export _FLOW="xtls-rprx-vision"
 
-    # Security block (goes inside streamSettings)
-    local sec_block=""
-    case "$SECURITY" in
-        tls) sec_block=$(printf '"security":"tls","tlsSettings":{"certificates":[{"certificateFile":"%s","keyFile":"%s"}],"minVersion":"1.2","fingerprint":"chrome"},' "$TLS_CERT" "$TLS_KEY") ;;
-        reality) sec_block=$(printf '"security":"reality","realitySettings":{"dest":"%s:443","serverNames":["%s"],"privateKey":"%s","shortIds":["%s"],"fingerprint":"chrome","spiderX":"/"},' \
-            "$REALITY_DEST" "$REALITY_SNI" "$REALITY_PRIV" "$REALITY_SID") ;;
-    esac
+    python3 << 'PYEOF'
+import json, os
 
-    # Transport block (goes inside streamSettings)
-    local net_block=""
-    case "$TRANSPORT" in
-        ws) net_block=$(printf '"wsSettings":{"path":"%s","headers":{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)","Sec-WebSocket-Protocol":"chat","Cache-Control":"no-cache"}}' "$PATH_OR_SVC") ;;
-        xhttp) net_block=$(printf '"xhttpSettings":{"path":"%s","mode":"stream-up","xPaddingBytes":"100-1000","scMaxEachPostBytes":"1000000-2000000","scMinPostsIntervalMs":"10-50","scStreamUpServerSecs":"5-15","noGRPCHeader":false,"extra":{"headers":{"Accept":"application/json, */*","Content-Type":"application/octet-stream"}}}' "$PATH_OR_SVC") ;;
-        grpc) net_block=$(printf '"grpcSettings":{"serviceName":"%s","multiMode":true,"idle_timeout":60,"health_check_timeout":20,"initial_windows_size":35536}' "$PATH_OR_SVC") ;;
-        tcp)  net_block='"tcpSettings":{"header":{"type":"http","request":{"version":"1.1","method":"GET","path":["/"],"headers":{"Host":["www.cloudflare.com"],"User-Agent":["Mozilla/5.0"],"Connection":["keep-alive"]}}}}' ;;
-        httpupgrade) net_block=$(printf '"httpupgradeSettings":{"path":"%s","headers":{"User-Agent":"Mozilla/5.0"}}' "$PATH_OR_SVC") ;;
-    esac
+out       = os.environ["_OUT"]
+port      = int(os.environ["_PORT"])
+proto     = os.environ["_PROTO"]
+transport = os.environ["_TRANSPORT"]
+path_val  = os.environ["_PATH"]
+security  = os.environ["_SECURITY"]
+uuid_val  = os.environ["_UUID"]
+password  = os.environ["_PASS"]
+flow      = os.environ["_FLOW"]
+ss_method = os.environ["_SS_METHOD"]
 
-    # Build complete config JSON
-    python3 - <<PYEOF
-import json
+if proto == "vless":
+    client = {"id": uuid_val}
+    if flow: client["flow"] = flow
+    settings = {"clients": [client], "decryption": "none"}
+elif proto == "vmess":
+    settings = {"clients": [{"id": uuid_val, "alterId": 0}]}
+elif proto == "trojan":
+    settings = {"clients": [{"password": password}]}
+elif proto == "socks":
+    settings = {"auth": "noauth", "udp": True, "accounts": [{"user": "user1", "pass": password}]}
+elif proto == "shadowsocks":
+    settings = {"method": ss_method, "password": password, "network": "tcp,udp"}
+
+stream = {"network": transport}
+
+if security == "tls":
+    stream["security"] = "tls"
+    stream["tlsSettings"] = {
+        "certificates": [{"certificateFile": os.environ["_TLS_CERT"], "keyFile": os.environ["_TLS_KEY"]}],
+        "minVersion": "1.2", "fingerprint": "chrome"
+    }
+elif security == "reality":
+    stream["security"] = "reality"
+    stream["realitySettings"] = {
+        "dest": os.environ["_R_DEST"] + ":443",
+        "serverNames": [os.environ["_R_SNI"]],
+        "privateKey": os.environ["_R_PRIV"],
+        "shortIds": [os.environ["_R_SID"]],
+        "fingerprint": "chrome", "spiderX": "/"
+    }
+
+if transport == "ws":
+    stream["wsSettings"] = {"path": "/" + path_val, "headers": {"User-Agent": "Mozilla/5.0", "Sec-WebSocket-Protocol": "chat"}}
+elif transport == "xhttp":
+    stream["xhttpSettings"] = {
+        "path": "/" + path_val, "mode": "stream-up",
+        "xPaddingBytes": "100-1000", "scMaxEachPostBytes": "1000000-2000000",
+        "scMinPostsIntervalMs": "10-50", "scStreamUpServerSecs": "5-15",
+        "noGRPCHeader": False,
+        "extra": {"headers": {"Accept": "application/json, */*", "Content-Type": "application/octet-stream"}}
+    }
+elif transport == "grpc":
+    stream["grpcSettings"] = {"serviceName": path_val, "multiMode": True, "idle_timeout": 60}
+elif transport == "tcp" and proto not in ("socks", "shadowsocks"):
+    stream["tcpSettings"] = {"header": {"type": "none"}}
+elif transport == "httpupgrade":
+    stream["httpupgradeSettings"] = {"path": "/" + path_val}
+
 config = {
     "inbounds": [{
-        "port": ${port},
-        "listen": "0.0.0.0",
-        "protocol": "${PROTO%%-*}",
-        "settings": json.loads("{" + """${settings}""" + "}"),
-        "streamSettings": json.loads("{" + """${sec_block}"network":"${TRANSPORT}",${net_block}""" + "}"),
-        "sniffing": {"enabled": True, "destOverride": ["http","tls","quic"]}
+        "port": port, "listen": "0.0.0.0",
+        "protocol": proto, "settings": settings,
+        "streamSettings": stream,
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"]}
     }]
 }
-with open("${outfile}", "w") as f:
+with open(out, "w") as f:
     json.dump(config, f, indent=2)
-print("${outfile}")
+print(out)
 PYEOF
 }
 
-# ── Add protocol ──────────────────────────────────────────────────
-add_protocol() {
+run_wizard() {
     local bin_type="$1" conf_dir="$2"
+    WZ_BIN="$bin_type"
     header "ADD ${bin_type^^} PROTOCOL"
+    wz_port
+    wz_protocol  || { press_enter ; return; }
+    wz_transport || { press_enter ; return; }
+    wz_path
+    [[ "$WZ_PROTO" == "shadowsocks" ]] && wz_ss_method
+    wz_security  || { press_enter ; return; }
+    wz_review    || { warn "Cancelled." ; press_enter ; return; }
 
-    read -rp "  ${CYAN}Listen port: ${RESET}" port
-    [[ ! "$port" =~ ^[0-9]+$ ]] && { err "Invalid port." ; press_enter ; return; }
-    port_in_use "$port" && { err "Port $port is already in use." ; press_enter ; return; }
+    local outfile; outfile=$(write_inbound_conf "$conf_dir")
 
-    local uuid; uuid=$(cat /proc/sys/kernel/random/uuid)
-
-    select_protocol  || { press_enter ; return; }
-    select_transport || { press_enter ; return; }
-    select_security  || { press_enter ; return; }
-
-    local outfile; outfile=$(write_conf "$conf_dir" "$port" "$uuid")
-
-    if [[ ! -f "$outfile" ]]; then
-        err "Failed to generate config. Check python3 is installed."
-        press_enter ; return
-    fi
-
-    if python3 -m json.tool "$outfile" &>/dev/null; then
-        systemctl restart "$bin_type" &>/dev/null || true
-        echo ""
-        line
-        ok "Protocol configured!"
-        printf "  %-14s %s\n" "Protocol:"  "$PROTO"
-        printf "  %-14s %s\n" "Transport:" "$TRANSPORT"
-        printf "  %-14s %s\n" "Port:"      "$port"
-        printf "  %-14s %s\n" "UUID/Pass:" "$uuid"
-        printf "  %-14s %s\n" "Path/Svc:"  "$PATH_OR_SVC"
-        printf "  %-14s %s\n" "Security:"  "$SECURITY"
-        if [[ "$SECURITY" == "reality" ]]; then
-            line_sep
-            warn "Copy these to your client:"
-            printf "  %-14s %s\n" "Public Key:" "$REALITY_PUB"
-            printf "  %-14s %s\n" "Short ID:"   "$REALITY_SID"
-            printf "  %-14s %s\n" "SNI:"        "$REALITY_SNI"
-        fi
+    if [[ -f "$outfile" ]] && python3 -m json.tool "$outfile" &>/dev/null; then
+        systemctl restart "$bin_type" &>/dev/null || true ; sleep 1
+        echo "" ; line ; ok "Protocol applied!"
+        printf "  %-14s %s\n" "Protocol:"  "$WZ_PROTO"
+        printf "  %-14s %s\n" "Transport:" "$WZ_TRANSPORT"
+        printf "  %-14s %s\n" "Port:"      "$WZ_PORT"
+        [[ -n "$WZ_PATH" ]] && printf "  %-14s %s\n" "Path/Svc:" "$WZ_PATH"
+        printf "  %-14s %s\n" "Security:"  "$WZ_SECURITY"
+        printf "  %-14s %s\n" "UUID/Pass:" "${WZ_UUID:-$WZ_PASSWORD}"
+        printf "  %-14s %s\n" "Status:"    "$(systemctl is-active "$bin_type" 2>/dev/null)"
+        [[ "$WZ_SECURITY" == "reality" ]] && {
+            line_sep ; warn "Save for client:"
+            printf "  %-14s %s\n" "Public Key:" "$WZ_REALITY_PUB"
+            printf "  %-14s %s\n" "Short ID:"   "$WZ_REALITY_SID"
+        }
         line
     else
-        err "Invalid JSON in $outfile:"
-        cat "$outfile"
+        err "Config generation failed. Check python3 is installed."
+        [[ -f "$outfile" ]] && cat "$outfile"
     fi
     press_enter
 }
 
-# ── Remove protocol ───────────────────────────────────────────────
 remove_protocol() {
-    local bin_type="$1" conf_dir="$2"
-    header "REMOVE ${bin_type^^} PROTOCOL"
-    local confs; confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
-    [[ -z "$confs" ]] && { warn "No protocols configured." ; press_enter ; return; }
-    echo "$confs" | nl -w3 -s') '
-    read -rp "  Select number: " sel
-    local f; f=$(echo "$confs" | sed -n "${sel}p")
-    [[ -z "$f" ]] && { err "Invalid selection." ; press_enter ; return; }
-    confirm "Remove $(basename "$f")?" || return
-    rm -f "$f"
-    systemctl restart "$bin_type" &>/dev/null || true
-    ok "Protocol removed."
+    local conf_dir="$1" bin_type="$2"
+    header "REMOVE PROTOCOL"
+    local confs=()
+    while IFS= read -r f; do confs+=("$f"); done < <(find "$conf_dir" -maxdepth 1 -name '*.json' 2>/dev/null)
+    [[ ${#confs[@]} -eq 0 ]] && { warn "No protocols configured." ; press_enter ; return; }
+    local i=1
+    for f in "${confs[@]}"; do
+        local p; p=$(python3 -c "import json; d=json.load(open('$f')); print(d['inbounds'][0]['port'])" 2>/dev/null || echo "?")
+        local r; r=$(python3 -c "import json; d=json.load(open('$f')); print(d['inbounds'][0]['protocol'])" 2>/dev/null || echo "?")
+        printf "  ${CYAN}[%d]${RESET}  %-38s port=${WHITE}%s${RESET}  proto=${WHITE}%s${RESET}\n" "$i" "$(basename "$f")" "$p" "$r"
+        (( i++ ))
+    done
+    line_sep ; read -rp "  Select number: " sel
+    if [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= ${#confs[@]} )); then
+        confirm "Remove $(basename "${confs[$((sel-1))]}")?" \
+            && rm -f "${confs[$((sel-1))]}" \
+            && systemctl restart "$bin_type" &>/dev/null \
+            && ok "Removed." || warn "Cancelled."
+    else err "Invalid."; fi
     press_enter
 }
 
-# ── Manager UI ────────────────────────────────────────────────────
 manager_ui() {
     local bin_type="$1" conf_dir="$2"
     while true; do
-        header "${bin_type^^} ADMINISTRATOR"
+        header "${bin_type^^} MANAGER"
         line_sep
         printf "  ${DIM}STATUS:   ${RESET}%s\n" "$(service_status "$bin_type")"
-        printf "  ${DIM}INBOUNDS: ${RESET}${WHITE}%s${RESET}\n" \
-            "$(ls "${conf_dir}"/*.json 2>/dev/null | wc -l) configured"
+        printf "  ${DIM}INBOUNDS: ${RESET}${WHITE}%s${RESET}\n" "$(find "$conf_dir" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l) configured"
         line_sep
-        echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}ADD PROTOCOL (WS/XHTTP/gRPC/TCP/HTTPUpgrade)${RESET}"
+        echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}ADD PROTOCOL (wizard)${RESET}"
         echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}REMOVE PROTOCOL${RESET}"
-        echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}LIST PROTOCOLS${RESET}"
+        echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}LIST INBOUNDS${RESET}"
         echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}VIEW CONFIG${RESET}"
         echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}EDIT CONFIG (nano)${RESET}"
         echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}REAL-TIME LOG${RESET}"
-        echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}FULL LOG (last 100)${RESET}"
-        echo -e "  ${CYAN}[8]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
-        echo -e "  ${CYAN}[9]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
-        echo -e "  ${CYAN}[10]>${RESET} ${WHITE}START / STOP${RESET}"
+        echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+        echo -e "  ${CYAN}[8]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+        echo -e "  ${CYAN}[9]>${RESET}  ${WHITE}START / STOP${RESET}"
+        echo -e "  ${CYAN}[10]>${RESET} ${WHITE}FIX SERVICE (conf/ mode)${RESET}"
         echo -e "  ${CYAN}[11]>${RESET} ${WHITE}INSTALL ${bin_type^^}${RESET}"
         echo -e "  ${BRED}[12]>${RESET} ${WHITE}UNINSTALL ${bin_type^^}${RESET}"
         line_sep
         echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
-        line_sep
-        echo ""
+        line_sep ; echo ""
         read -rp "  Enter an Option: " opt
         local confs f sel
         case "$opt" in
-            1)  add_protocol "$bin_type" "$conf_dir" ;;
-            2)  remove_protocol "$bin_type" "$conf_dir" ;;
+            1)  mkdir -p "$conf_dir" ; run_wizard "$bin_type" "$conf_dir" ;;
+            2)  remove_protocol "$conf_dir" "$bin_type" ;;
             3)  header "INBOUNDS — ${bin_type^^}"
-                confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
-                [[ -z "$confs" ]] && { warn "None configured." ; press_enter ; continue; }
-                echo "$confs" | while IFS= read -r f; do
-                    local nm; nm=$(basename "$f" .json)
+                confs=() ; while IFS= read -r f; do confs+=("$f"); done < <(find "$conf_dir" -maxdepth 1 -name '*.json' 2>/dev/null)
+                [[ ${#confs[@]} -eq 0 ]] && { warn "None." ; press_enter ; continue; }
+                for f in "${confs[@]}"; do
                     local pv; pv=$(python3 -c "import json; d=json.load(open('$f')); print(d['inbounds'][0]['port'])" 2>/dev/null || echo "?")
-                    printf "  ${CYAN}%-38s${RESET} port=${WHITE}%s${RESET}\n" "$nm" "$pv"
-                done
-                press_enter ;;
-            4)  confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
-                [[ -z "$confs" ]] && { warn "None." ; press_enter ; continue; }
-                echo "$confs" | nl -w3 -s') '
-                read -rp "  Select: " sel
-                f=$(echo "$confs" | sed -n "${sel}p")
+                    local prot; prot=$(python3 -c "import json; d=json.load(open('$f')); print(d['inbounds'][0]['protocol'])" 2>/dev/null || echo "?")
+                    printf "  ${CYAN}%-38s${RESET} port=${WHITE}%-6s${RESET} proto=${WHITE}%s${RESET}\n" "$(basename "$f")" "$pv" "$prot"
+                done ; press_enter ;;
+            4)  confs=() ; while IFS= read -r f; do confs+=("$f"); done < <(find "$conf_dir" -maxdepth 1 -name '*.json' 2>/dev/null)
+                [[ ${#confs[@]} -eq 0 ]] && { warn "None." ; press_enter ; continue; }
+                local i=1 ; for f in "${confs[@]}"; do printf "  ${CYAN}[%d]${RESET}  %s\n" "$i" "$(basename "$f")"; (( i++ )); done
+                read -rp "  Select: " sel ; f="${confs[$((sel-1))]}"
                 [[ -n "$f" ]] && { python3 -m json.tool "$f" 2>/dev/null || cat "$f"; }
                 press_enter ;;
-            5)  confs=$(ls "${conf_dir}"/*.json 2>/dev/null)
-                [[ -z "$confs" ]] && { warn "None." ; press_enter ; continue; }
-                echo "$confs" | nl -w3 -s') '
-                read -rp "  Select: " sel
-                f=$(echo "$confs" | sed -n "${sel}p")
-                [[ -n "$f" ]] && nano "$f"
-                systemctl restart "$bin_type" &>/dev/null || true ;;
+            5)  confs=() ; while IFS= read -r f; do confs+=("$f"); done < <(find "$conf_dir" -maxdepth 1 -name '*.json' 2>/dev/null)
+                [[ ${#confs[@]} -eq 0 ]] && { warn "None." ; press_enter ; continue; }
+                local i=1 ; for f in "${confs[@]}"; do printf "  ${CYAN}[%d]${RESET}  %s\n" "$i" "$(basename "$f")"; (( i++ )); done
+                read -rp "  Select: " sel ; f="${confs[$((sel-1))]}"
+                [[ -n "$f" ]] && nano "$f" ; systemctl restart "$bin_type" &>/dev/null ;;
             6)  journalctl -fu "$bin_type" ;;
-            7)  journalctl -u "$bin_type" --no-pager | tail -100 ; press_enter ;;
-            8)  systemctl status "$bin_type" --no-pager ; press_enter ;;
-            9)  systemctl restart "$bin_type" && ok "Restarted." || err "Failed." ; press_enter ;;
-            10) if systemctl is-active --quiet "$bin_type"; then
+            7)  systemctl status "$bin_type" --no-pager ; press_enter ;;
+            8)  systemctl restart "$bin_type" && ok "Restarted." || err "Failed." ; press_enter ;;
+            9)  if systemctl is-active --quiet "$bin_type"; then
                     confirm "Stop $bin_type?" && systemctl stop "$bin_type" && ok "Stopped."
                 else
                     confirm "Start $bin_type?" && systemctl start "$bin_type" && ok "Started."
                 fi ; press_enter ;;
-            11) if [[ "$bin_type" == "xray" ]]; then
-                    is_xray_installed && warn "Already installed." || download_xray
-                else
-                    is_v2ray_installed && warn "Already installed." || download_v2ray
-                fi ; press_enter ;;
+            10) _setup_xray_service ; press_enter ;;
+            11) [[ "$bin_type" == "xray" ]] && install_xray || install_v2ray ;;
             12) if [[ "$bin_type" == "xray" ]]; then
-                    confirm "Uninstall Xray?" && \
-                        bash <(curl -L https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh) --remove
+                    confirm "Uninstall Xray?" && bash <(curl -L https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh) --remove
                 else
-                    confirm "Uninstall V2Ray?" && \
-                        bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh) --remove
+                    confirm "Uninstall V2Ray?" && bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh) --remove
                 fi ; press_enter ;;
-            0)  break ;;
+            0) break ;;
         esac
     done
 }
 
-# ── Entry point ───────────────────────────────────────────────────
 while true; do
     header "V2RAY AND XRAY MANAGER"
     line_sep
-    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}V2Ray Manager${RESET}"
-    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}Xray Manager${RESET}  ${DIM}(XHTTP / Reality / XTLS Vision)${RESET}"
-    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}Configure Xray Service (conf/ mode)${RESET}"
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}Xray Manager${RESET}  ${DIM}VLESS/VMess/Trojan/SS/SOCKS + XHTTP/Reality${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}V2Ray Manager${RESET} ${DIM}VLESS/VMess/Trojan/SS/SOCKS + WS/gRPC${RESET}"
     line_sep
     echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
-    line_sep
-    echo ""
+    line_sep ; echo ""
     read -rp "  Enter an Option: " opt
     case "$opt" in
-        1) mkdir -p "$V2_CONF_DIR" ; manager_ui "v2ray" "$V2_CONF_DIR" ;;
-        2) mkdir -p "$XR_CONF_DIR" ; manager_ui "xray"  "$XR_CONF_DIR" ;;
-        3) _configure_xray_service ; press_enter ;;
+        1) mkdir -p "$XR_CONF_DIR" ; manager_ui "xray"  "$XR_CONF_DIR" ;;
+        2) mkdir -p "$V2_CONF_DIR" ; manager_ui "v2ray" "$V2_CONF_DIR" ;;
         0) break ;;
     esac
 done
