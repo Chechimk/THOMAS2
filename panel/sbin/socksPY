@@ -1,0 +1,59 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+SOCKS_SVC="sockspy"
+SOCKS_BIN="/usr/local/bin/microsocks"
+SOCKS_CONF="/etc/panel/sockspy.conf"
+
+while true; do
+    header "SOCKS5 PYTHON PROXY"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $SOCKS_SVC)"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL SOCKS5 (microsocks)${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}CONFIGURE PORT${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${BRED}[6]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) apt-get install -y gcc make git
+           cd /tmp && git clone https://github.com/rofl0r/microsocks --depth=1
+           cd microsocks && make && cp microsocks "$SOCKS_BIN" && cd / && rm -rf /tmp/microsocks
+           read -rp "  ${CYAN}SOCKS5 port: ${RESET}" p
+           echo "$p" > "$SOCKS_CONF"
+           cat > /etc/systemd/system/${SOCKS_SVC}.service <<EOF
+[Unit]
+Description=MicroSocks SOCKS5 proxy
+After=network.target
+[Service]
+ExecStart=${SOCKS_BIN} -p ${p}
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$SOCKS_SVC" --now
+           ok "SOCKS5 installed on port $p." ; press_enter ;;
+        2) read -rp "  ${CYAN}New port: ${RESET}" p
+           echo "$p" > "$SOCKS_CONF"
+           sed -i "s/-p [0-9]*/-p ${p}/" /etc/systemd/system/${SOCKS_SVC}.service 2>/dev/null
+           systemctl daemon-reload ; systemctl restart "$SOCKS_SVC" && ok "Port updated." ; press_enter ;;
+        3) if systemctl is-active --quiet "$SOCKS_SVC"; then
+               confirm "Stop?" && systemctl stop "$SOCKS_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$SOCKS_SVC" && ok "Started."
+           fi ; press_enter ;;
+        4) systemctl restart "$SOCKS_SVC" && ok "Restarted." ; press_enter ;;
+        5) systemctl status "$SOCKS_SVC" --no-pager ; press_enter ;;
+        6) confirm "Uninstall?" && systemctl disable --now "$SOCKS_SVC" &>/dev/null
+           rm -f "$SOCKS_BIN" "/etc/systemd/system/${SOCKS_SVC}.service" "$SOCKS_CONF"
+           systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

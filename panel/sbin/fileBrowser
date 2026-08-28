@@ -1,0 +1,56 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+FB_BIN="/usr/local/bin/filebrowser"
+FB_SVC="filebrowser"
+FB_PORT_FILE="/etc/panel/filebrowser.port"
+
+while true; do
+    header "FILE BROWSER"
+    local_port=$(cat "$FB_PORT_FILE" 2>/dev/null || echo "8080")
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $FB_SVC)"
+    printf "  ${DIM}URL:    ${RESET}${WHITE}http://$(get_ip):${local_port}${RESET}\n"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL FILE BROWSER${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${BRED}[5]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) info "Installing filebrowser..."
+           curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash \
+               || { err "Install failed." ; press_enter ; break; }
+           read -rp "  ${CYAN}Port (default 8080): ${RESET}" p
+           p="${p:-8080}" ; echo "$p" > "$FB_PORT_FILE"
+           cat > "/etc/systemd/system/${FB_SVC}.service" <<EOF
+[Unit]
+Description=File Browser
+After=network.target
+[Service]
+ExecStart=${FB_BIN} --port ${p} --root /root --address 0.0.0.0
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$FB_SVC" --now
+           ok "File browser at http://$(get_ip):${p} (admin/admin)" ; press_enter ;;
+        2) systemctl status "$FB_SVC" --no-pager ; press_enter ;;
+        3) systemctl restart "$FB_SVC" && ok "Restarted." ; press_enter ;;
+        4) if systemctl is-active --quiet "$FB_SVC"; then
+               confirm "Stop?" && systemctl stop "$FB_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$FB_SVC" && ok "Started."
+           fi ; press_enter ;;
+        5) confirm "Uninstall File Browser?" && systemctl disable --now "$FB_SVC" &>/dev/null \
+               && rm -f "$FB_BIN" "/etc/systemd/system/${FB_SVC}.service" \
+               && systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

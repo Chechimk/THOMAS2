@@ -1,0 +1,85 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+TOKEN_FILE="/etc/panel/api_token"
+API_SVC="panel-api"
+API_PORT_FILE="/etc/panel/api.port"
+
+[[ ! -f "$TOKEN_FILE" ]] && openssl rand -hex 32 > "$TOKEN_FILE"
+API_PORT=$(cat "$API_PORT_FILE" 2>/dev/null || echo "7979")
+API_TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null)
+SERVER_IP=$(get_ip)
+
+while true; do
+    header "API MENU"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $API_SVC)"
+    printf "  ${DIM}URL:    ${RESET}${WHITE}http://${SERVER_IP}:${API_PORT}/api/${RESET}\n"
+    printf "  ${DIM}Token:  ${RESET}${WHITE}%s${RESET}\n" "$API_TOKEN"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}START API SERVER${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}STOP API SERVER${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}REGENERATE TOKEN${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}CHANGE PORT${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}TEST API${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) cat > /etc/panel/api_server.py << 'PYAPI'
+#!/usr/bin/env python3
+import json, os, subprocess, http.server, urllib.parse
+PORT = int(open("/etc/panel/api.port").read().strip())
+TOKEN = open("/etc/panel/api_token").read().strip()
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def auth(self):
+        t = self.headers.get("X-Token","")
+        return t == TOKEN
+    def send_json(self, data, code=200):
+        body = json.dumps(data).encode()
+        self.send_response(code); self.send_header("Content-Type","application/json")
+        self.send_header("Content-Length", len(body)); self.end_headers(); self.wfile.write(body)
+    def do_GET(self):
+        if not self.auth(): return self.send_json({"error":"unauthorized"},401)
+        p = self.path.rstrip("/")
+        if p == "/api/status":
+            r = subprocess.run(["systemctl","is-active","xray"], capture_output=True, text=True)
+            self.send_json({"xray": r.stdout.strip(), "ip": open("/proc/net/if_inet6").read()[:20] if os.path.exists("/proc/net/if_inet6") else "n/a"})
+        elif p == "/api/users":
+            r = subprocess.run(["who"], capture_output=True, text=True)
+            self.send_json({"online": r.stdout.strip().splitlines()})
+        else:
+            self.send_json({"endpoints":["/api/status","/api/users"]})
+
+http.server.HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+PYAPI
+           cat > "/etc/systemd/system/${API_SVC}.service" <<EOF
+[Unit]
+Description=Panel REST API
+After=network.target
+[Service]
+ExecStart=/usr/bin/python3 /etc/panel/api_server.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$API_SVC" --now
+           ok "API running at http://${SERVER_IP}:${API_PORT}/api/" ; press_enter ;;
+        2) systemctl stop "$API_SVC" && ok "API stopped." ; press_enter ;;
+        3) openssl rand -hex 32 > "$TOKEN_FILE"
+           API_TOKEN=$(cat "$TOKEN_FILE") ; systemctl restart "$API_SVC" &>/dev/null
+           ok "Token regenerated: $API_TOKEN" ; press_enter ;;
+        4) read -rp "  ${CYAN}New port: ${RESET}" p
+           echo "$p" > "$API_PORT_FILE" ; API_PORT="$p"
+           systemctl restart "$API_SVC" &>/dev/null && ok "Port set to $p." ; press_enter ;;
+        5) result=$(curl -sf -H "X-Token: ${API_TOKEN}" "http://127.0.0.1:${API_PORT}/api/status" 2>/dev/null)
+           [[ -n "$result" ]] && echo -e "  ${BGREEN}OK:${RESET} $result" || err "API not responding."
+           press_enter ;;
+        0) break ;;
+    esac
+done

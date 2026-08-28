@@ -1,0 +1,63 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+BADVPN_BIN="/usr/local/bin/badvpn-udpgw"
+BADVPN_SVC="badvpn"
+BADVPN_PORT_FILE="/etc/panel/badvpn.port"
+
+while true; do
+    header "BADVPN UDP GATEWAY"
+    local_port=$(cat "$BADVPN_PORT_FILE" 2>/dev/null || echo "7300")
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $BADVPN_SVC)"
+    printf "  ${DIM}PORT:   ${RESET}${WHITE}%s${RESET}\n" "$local_port"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL BADVPN${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}CHANGE PORT${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${BRED}[6]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) info "Downloading badvpn-udpgw..."
+           curl -Lo "$BADVPN_BIN" \
+               "https://raw.githubusercontent.com/daybreakersx/premscript/master/badvpn-udpgw64" \
+               || { err "Download failed." ; press_enter ; break; }
+           chmod +x "$BADVPN_BIN"
+           read -rp "  ${CYAN}UDP gateway port (default 7300): ${RESET}" p
+           p="${p:-7300}" ; echo "$p" > "$BADVPN_PORT_FILE"
+           cat > "/etc/systemd/system/${BADVPN_SVC}.service" <<EOF
+[Unit]
+Description=BadVPN UDP Gateway
+After=network.target
+[Service]
+ExecStart=${BADVPN_BIN} --listen-addr 127.0.0.1:${p} --max-clients 1000 --max-connections-for-client 10
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$BADVPN_SVC" --now
+           ok "BadVPN installed on port $p." ; press_enter ;;
+        2) read -rp "  ${CYAN}New port: ${RESET}" p
+           echo "$p" > "$BADVPN_PORT_FILE"
+           sed -i "s|127.0.0.1:[0-9]*|127.0.0.1:${p}|" "/etc/systemd/system/${BADVPN_SVC}.service" 2>/dev/null
+           systemctl daemon-reload ; systemctl restart "$BADVPN_SVC" && ok "Port updated to $p." ; press_enter ;;
+        3) if systemctl is-active --quiet "$BADVPN_SVC"; then
+               confirm "Stop?" && systemctl stop "$BADVPN_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$BADVPN_SVC" && ok "Started."
+           fi ; press_enter ;;
+        4) systemctl restart "$BADVPN_SVC" && ok "Restarted." ; press_enter ;;
+        5) systemctl status "$BADVPN_SVC" --no-pager ; press_enter ;;
+        6) confirm "Uninstall BadVPN?" && systemctl disable --now "$BADVPN_SVC" &>/dev/null \
+               && rm -f "$BADVPN_BIN" "/etc/systemd/system/${BADVPN_SVC}.service" \
+               && systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

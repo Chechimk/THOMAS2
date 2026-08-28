@@ -1,0 +1,60 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+SLOWDNS_BIN="/usr/local/bin/slowdns"
+SLOWDNS_SVC="slowdns"
+
+while true; do
+    header "SLOWDNS MANAGER"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $SLOWDNS_SVC)"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL SLOWDNS${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}CONFIGURE${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}VIEW LOG${RESET}"
+    echo -e "  ${BRED}[7]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) info "Downloading SlowDNS..."
+           curl -Lo "$SLOWDNS_BIN" \
+               "https://github.com/alihss/slowdns/releases/latest/download/server-linux-amd64" \
+               && chmod +x "$SLOWDNS_BIN" && ok "SlowDNS downloaded." || err "Download failed."
+           press_enter ;;
+        2) read -rp "  ${CYAN}DNS port (default 53): ${RESET}" dns_port
+           dns_port="${dns_port:-53}"
+           read -rp "  ${CYAN}Target server (e.g. 127.0.0.1:22): ${RESET}" target
+           read -rp "  ${CYAN}Nameserver domain: ${RESET}" ns_domain
+           cat > "/etc/systemd/system/${SLOWDNS_SVC}.service" <<EOF
+[Unit]
+Description=SlowDNS Server
+After=network.target
+[Service]
+ExecStart=${SLOWDNS_BIN} -dns :${dns_port} -target ${target} -ns ${ns_domain}
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$SLOWDNS_SVC" --now
+           ok "SlowDNS configured." ; press_enter ;;
+        3) systemctl status "$SLOWDNS_SVC" --no-pager ; press_enter ;;
+        4) systemctl restart "$SLOWDNS_SVC" && ok "Restarted." ; press_enter ;;
+        5) if systemctl is-active --quiet "$SLOWDNS_SVC"; then
+               confirm "Stop?" && systemctl stop "$SLOWDNS_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$SLOWDNS_SVC" && ok "Started."
+           fi ; press_enter ;;
+        6) journalctl -u "$SLOWDNS_SVC" --no-pager | tail -30 ; press_enter ;;
+        7) confirm "Uninstall SlowDNS?" && systemctl disable --now "$SLOWDNS_SVC" &>/dev/null \
+               && rm -f "$SLOWDNS_BIN" "/etc/systemd/system/${SLOWDNS_SVC}.service" \
+               && systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

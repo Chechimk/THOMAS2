@@ -1,0 +1,113 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+WG_CONF="/etc/wireguard/wg0.conf"
+WG_SVC="wg-quick@wg0"
+
+gen_keys() {
+    local priv pub
+    priv=$(wg genkey)
+    pub=$(echo "$priv" | wg pubkey)
+    echo "$priv $pub"
+}
+
+install_wg() {
+    header "WIREGUARD INSTALLER"
+    apt-get install -y wireguard wireguard-tools || { err "Install failed." ; press_enter ; return; }
+
+    read -rp "  ${CYAN}WireGuard listen port (default 51820): ${RESET}" p
+    p="${p:-51820}"
+    read -rp "  ${CYAN}VPN subnet (default 10.66.66.0/24): ${RESET}" subnet
+    subnet="${subnet:-10.66.66.0/24}"
+
+    local keys; keys=$(gen_keys)
+    local priv; priv=$(echo "$keys" | awk '{print $1}')
+    local pub;  pub=$(echo "$keys"  | awk '{print $2}')
+
+    mkdir -p /etc/wireguard
+    cat > "$WG_CONF" <<EOF
+[Interface]
+Address = $(echo "$subnet" | sed 's|0/|1/|')
+ListenPort = ${p}
+PrivateKey = ${priv}
+PostUp   = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o \$(ip route | awk '/default/{print \$5}') -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o \$(ip route | awk '/default/{print \$5}') -j MASQUERADE
+EOF
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    grep -q 'net.ipv4.ip_forward' /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    systemctl enable "$WG_SVC" --now
+    ok "WireGuard installed. Server public key:"
+    echo -e "  ${WHITE}${pub}${RESET}"
+    press_enter
+}
+
+add_client() {
+    [[ ! -f "$WG_CONF" ]] && { err "WireGuard not configured." ; press_enter ; return; }
+    header "ADD WIREGUARD CLIENT"
+    read -rp "  ${CYAN}Client name: ${RESET}" name
+    read -rp "  ${CYAN}Client IP (e.g. 10.66.66.2/32): ${RESET}" cip
+    local keys; keys=$(gen_keys)
+    local cpriv; cpriv=$(echo "$keys" | awk '{print $1}')
+    local cpub;  cpub=$(echo "$keys"  | awk '{print $2}')
+    local server_pub; server_pub=$(grep PrivateKey "$WG_CONF" | awk '{print $3}' | wg pubkey)
+    local server_ip; server_ip=$(get_ip)
+    local server_port; server_port=$(grep ListenPort "$WG_CONF" | awk '{print $3}')
+
+    echo -e "\n[Peer]\nPublicKey = ${cpub}\nAllowedIPs = ${cip}" >> "$WG_CONF"
+    wg syncconf wg0 <(wg-quick strip wg0) 2>/dev/null || systemctl restart "$WG_SVC"
+
+    echo ""
+    line
+    ok "Client config for $name:"
+    cat <<EOF
+[Interface]
+PrivateKey = ${cpriv}
+Address = ${cip}
+DNS = 8.8.8.8
+
+[Peer]
+PublicKey = ${server_pub}
+Endpoint = ${server_ip}:${server_port}
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+EOF
+    line
+    press_enter
+}
+
+while true; do
+    header "WIREGUARD ADMIN"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $WG_SVC)"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL WIREGUARD${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}ADD CLIENT${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}SHOW PEERS${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}EDIT CONFIG (nano)${RESET}"
+    echo -e "  ${BRED}[8]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) install_wg ;;
+        2) add_client ;;
+        3) wg show 2>/dev/null || warn "WireGuard not running." ; press_enter ;;
+        4) systemctl status "$WG_SVC" --no-pager ; press_enter ;;
+        5) systemctl restart "$WG_SVC" && ok "Restarted." ; press_enter ;;
+        6) if systemctl is-active --quiet "$WG_SVC"; then
+               confirm "Stop?" && systemctl stop "$WG_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$WG_SVC" && ok "Started."
+           fi ; press_enter ;;
+        7) nano "$WG_CONF" ; systemctl restart "$WG_SVC" &>/dev/null ;;
+        8) confirm "Uninstall WireGuard?" && systemctl disable --now "$WG_SVC" &>/dev/null \
+               && apt-get purge -y wireguard wireguard-tools && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

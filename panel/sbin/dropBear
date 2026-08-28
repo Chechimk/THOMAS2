@@ -1,0 +1,43 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "DROPBEAR SSH MANAGER"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status dropbear)"
+    printf "  ${DIM}PORT:   ${RESET}${WHITE}%s${RESET}\n" "$(grep -oP '(?<=DROPBEAR_PORT=)\d+' /etc/default/dropbear 2>/dev/null || echo 'not set')"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL DROPBEAR${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}MODIFY PORT${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}VIEW LOG${RESET}"
+    echo -e "  ${BRED}[7]>${RESET}  ${WHITE}UNINSTALL DROPBEAR${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) apt-get install -y dropbear && ok "Dropbear installed."
+           sed -i 's/^NO_START=1/NO_START=0/' /etc/default/dropbear 2>/dev/null
+           systemctl enable dropbear --now && ok "Dropbear started."
+           press_enter ;;
+        2) read -rp "  ${CYAN}New port: ${RESET}" p
+           sed -i "s/^DROPBEAR_PORT=.*/DROPBEAR_PORT=${p}/" /etc/default/dropbear 2>/dev/null \
+               || echo "DROPBEAR_PORT=${p}" >> /etc/default/dropbear
+           systemctl restart dropbear && ok "Port set to $p." ; press_enter ;;
+        3) if systemctl is-active --quiet dropbear; then
+               confirm "Stop Dropbear?" && systemctl stop dropbear && ok "Stopped."
+           else
+               confirm "Start Dropbear?" && systemctl start dropbear && ok "Started."
+           fi ; press_enter ;;
+        4) systemctl restart dropbear && ok "Restarted." ; press_enter ;;
+        5) systemctl status dropbear --no-pager ; press_enter ;;
+        6) journalctl -u dropbear --no-pager | tail -30 ; press_enter ;;
+        7) confirm "Uninstall Dropbear?" && apt-get purge -y dropbear && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

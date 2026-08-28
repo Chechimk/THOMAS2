@@ -1,0 +1,48 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "SQUID PROXY MANAGER"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status squid)"
+    printf "  ${DIM}PORT:   ${RESET}${WHITE}%s${RESET}\n" "$(grep -oP '(?<=http_port )\d+' /etc/squid/squid.conf 2>/dev/null | head -1 || echo 'not set')"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL SQUID${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}MODIFY PORT${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}EDIT CONFIG (nano)${RESET}"
+    echo -e "  ${CYAN}[7]>${RESET}  ${WHITE}VIEW LOG${RESET}"
+    echo -e "  ${BRED}[8]>${RESET}  ${WHITE}UNINSTALL SQUID${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) apt-get install -y squid
+           read -rp "  ${CYAN}HTTP proxy port (default 3128): ${RESET}" p
+           p="${p:-3128}"
+           sed -i "s/^http_port .*/http_port ${p}/" /etc/squid/squid.conf 2>/dev/null \
+               || echo "http_port ${p}" >> /etc/squid/squid.conf
+           # Allow all connections (open proxy — restrict in production)
+           sed -i '/^http_access deny all/i http_access allow all' /etc/squid/squid.conf 2>/dev/null
+           systemctl enable squid --now && ok "Squid installed on port $p." ; press_enter ;;
+        2) read -rp "  ${CYAN}New port: ${RESET}" p
+           sed -i "s/^http_port .*/http_port ${p}/" /etc/squid/squid.conf
+           systemctl restart squid && ok "Port updated to $p." ; press_enter ;;
+        3) systemctl status squid --no-pager ; press_enter ;;
+        4) systemctl restart squid && ok "Restarted." ; press_enter ;;
+        5) if systemctl is-active --quiet squid; then
+               confirm "Stop Squid?" && systemctl stop squid && ok "Stopped."
+           else
+               confirm "Start Squid?" && systemctl start squid && ok "Started."
+           fi ; press_enter ;;
+        6) nano /etc/squid/squid.conf ; systemctl restart squid &>/dev/null ;;
+        7) tail -50 /var/log/squid/access.log 2>/dev/null || journalctl -u squid --no-pager | tail -30 ; press_enter ;;
+        8) confirm "Uninstall Squid?" && apt-get purge -y squid && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

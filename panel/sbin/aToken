@@ -1,0 +1,31 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+TOKEN_FILE="/etc/panel/api_token"
+
+[[ ! -f "$TOKEN_FILE" ]] && openssl rand -hex 32 > "$TOKEN_FILE"
+
+while true; do
+    header "AUTH TOKEN MANAGER"
+    line_sep
+    printf "  ${DIM}Current Token:${RESET}\n"
+    printf "  ${WHITE}%s${RESET}\n" "$(cat "$TOKEN_FILE" 2>/dev/null)"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}REGENERATE TOKEN${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}SET CUSTOM TOKEN${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}SHOW TOKEN${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) openssl rand -hex 32 > "$TOKEN_FILE"
+           ok "New token generated." ; press_enter ;;
+        2) read -rp "  ${CYAN}Enter custom token: ${RESET}" tk
+           echo "$tk" > "$TOKEN_FILE" && ok "Token updated." ; press_enter ;;
+        3) echo -e "\n  ${WHITE}$(cat "$TOKEN_FILE")${RESET}\n" ; press_enter ;;
+        0) break ;;
+    esac
+done

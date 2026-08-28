@@ -1,0 +1,103 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+BOT_SVC="panel-tgbot"
+BOT_CONF="/etc/panel/telegram_bot.conf"
+BOT_SCRIPT="/etc/panel/tgbot.py"
+
+write_bot() {
+    cat > "$BOT_SCRIPT" << 'PYBOT'
+#!/usr/bin/env python3
+import os, subprocess, threading
+try:
+    import telebot
+except ImportError:
+    subprocess.run(["pip3","install","--break-system-packages","--quiet","pyTelegramBotAPI"])
+    import telebot
+
+conf = {}
+with open("/etc/panel/telegram_bot.conf") as f:
+    for line in f:
+        k,_,v = line.strip().partition("=")
+        conf[k] = v
+
+bot = telebot.TeleBot(conf.get("TOKEN",""))
+ADMIN = int(conf.get("ADMIN_ID","0"))
+
+def is_admin(m): return m.from_user.id == ADMIN
+
+@bot.message_handler(commands=["start","help"])
+def start(m):
+    if not is_admin(m): return
+    bot.reply_to(m, "VPN Panel Bot\n/status - service status\n/users - SSH users\n/restart - restart xray")
+
+@bot.message_handler(commands=["status"])
+def status(m):
+    if not is_admin(m): return
+    r = subprocess.run(["systemctl","is-active","xray"], capture_output=True, text=True)
+    bot.reply_to(m, f"Xray: {r.stdout.strip()}")
+
+@bot.message_handler(commands=["restart"])
+def restart(m):
+    if not is_admin(m): return
+    subprocess.run(["systemctl","restart","xray"])
+    bot.reply_to(m, "Xray restarted.")
+
+@bot.message_handler(commands=["users"])
+def users(m):
+    if not is_admin(m): return
+    r = subprocess.run(["who"], capture_output=True, text=True)
+    bot.reply_to(m, r.stdout or "No users online.")
+
+bot.infinity_polling()
+PYBOT
+    chmod +x "$BOT_SCRIPT"
+}
+
+while true; do
+    header "TELEGRAM BOT"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $BOT_SVC)"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}SETUP BOT${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}RESTART${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}VIEW LOG${RESET}"
+    echo -e "  ${BRED}[5]>${RESET}  ${WHITE}REMOVE BOT${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) read -rp "  ${CYAN}Bot Token (from @BotFather): ${RESET}" token
+           read -rp "  ${CYAN}Your Telegram User ID: ${RESET}" admin_id
+           echo -e "TOKEN=${token}\nADMIN_ID=${admin_id}" > "$BOT_CONF"
+           pip3 install --quiet --break-system-packages pyTelegramBotAPI 2>/dev/null
+           write_bot
+           cat > "/etc/systemd/system/${BOT_SVC}.service" <<EOF
+[Unit]
+Description=Panel Telegram Bot
+After=network.target
+[Service]
+ExecStart=/usr/bin/python3 ${BOT_SCRIPT}
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$BOT_SVC" --now
+           ok "Telegram bot started." ; press_enter ;;
+        2) if systemctl is-active --quiet "$BOT_SVC"; then
+               confirm "Stop bot?" && systemctl stop "$BOT_SVC" && ok "Stopped."
+           else
+               confirm "Start bot?" && systemctl start "$BOT_SVC" && ok "Started."
+           fi ; press_enter ;;
+        3) systemctl restart "$BOT_SVC" && ok "Restarted." ; press_enter ;;
+        4) journalctl -u "$BOT_SVC" --no-pager | tail -30 ; press_enter ;;
+        5) confirm "Remove bot?" && systemctl disable --now "$BOT_SVC" &>/dev/null \
+               && rm -f "$BOT_SCRIPT" "$BOT_CONF" "/etc/systemd/system/${BOT_SVC}.service" \
+               && systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

@@ -1,0 +1,59 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+SSHGO_BIN="/usr/local/bin/sshgo"
+SSHGO_SVC="sshgo"
+
+while true; do
+    header "SSHGO MANAGER"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $SSHGO_SVC)"
+    line_sep
+    echo -e "  ${DIM}SSH over WebSocket/HTTP tunnel${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL SSHGO${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}CONFIGURE${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${BRED}[6]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) info "Downloading sshgo..."
+           curl -Lo "$SSHGO_BIN" \
+               "https://github.com/GoBelieveIO/sshgo/releases/latest/download/sshgo_linux_amd64" \
+               && chmod +x "$SSHGO_BIN" && ok "sshgo downloaded." || err "Download failed."
+           press_enter ;;
+        2) read -rp "  ${CYAN}Listen port: ${RESET}" p
+           read -rp "  ${CYAN}Forward to (default 127.0.0.1:22): ${RESET}" fwd
+           fwd="${fwd:-127.0.0.1:22}"
+           cat > "/etc/systemd/system/${SSHGO_SVC}.service" <<EOF
+[Unit]
+Description=SSHGo Tunnel
+After=network.target
+[Service]
+ExecStart=${SSHGO_BIN} -listen :${p} -forward ${fwd}
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload ; systemctl enable "$SSHGO_SVC" --now
+           ok "SSHGo configured on port $p → $fwd" ; press_enter ;;
+        3) systemctl status "$SSHGO_SVC" --no-pager ; press_enter ;;
+        4) systemctl restart "$SSHGO_SVC" && ok "Restarted." ; press_enter ;;
+        5) if systemctl is-active --quiet "$SSHGO_SVC"; then
+               confirm "Stop?" && systemctl stop "$SSHGO_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$SSHGO_SVC" && ok "Started."
+           fi ; press_enter ;;
+        6) confirm "Uninstall?" && systemctl disable --now "$SSHGO_SVC" &>/dev/null \
+               && rm -f "$SSHGO_BIN" "/etc/systemd/system/${SSHGO_SVC}.service" \
+               && systemctl daemon-reload && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

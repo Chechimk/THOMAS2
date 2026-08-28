@@ -1,0 +1,68 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+HY2_BIN="/usr/local/bin/hysteria"
+HY2_CONF="/etc/hysteria/config.yaml"
+HY2_SVC="hysteria-server"
+
+install_hysteria() {
+    info "Installing Hysteria2..."
+    bash <(curl -fsSL https://get.hy2.sh/) || { err "Installation failed." ; press_enter ; return; }
+    mkdir -p /etc/hysteria
+
+    read -rp "  ${CYAN}Listen port (default 443): ${RESET}" p
+    p="${p:-443}"
+    read -rp "  ${CYAN}Password: ${RESET}" pw
+
+    cat > "$HY2_CONF" <<EOF
+listen: :${p}
+auth:
+  type: password
+  password: ${pw}
+masquerade:
+  type: proxy
+  proxy:
+    url: https://bing.com
+    rewriteHost: true
+EOF
+
+    systemctl enable "$HY2_SVC" --now
+    ok "Hysteria2 installed on port $p."
+    press_enter
+}
+
+while true; do
+    header "UDP-HYSTERIA2 MANAGER"
+    line_sep
+    printf "  ${DIM}STATUS: ${RESET}%s\n" "$(service_status $HY2_SVC)"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}INSTALL HYSTERIA2${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}EDIT CONFIG (nano)${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}SERVICE STATUS${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}RESTART SERVICE${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}START / STOP${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}REAL-TIME LOG${RESET}"
+    echo -e "  ${BRED}[7]>${RESET}  ${WHITE}UNINSTALL${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) install_hysteria ;;
+        2) nano "$HY2_CONF" ; systemctl restart "$HY2_SVC" &>/dev/null ;;
+        3) systemctl status "$HY2_SVC" --no-pager ; press_enter ;;
+        4) systemctl restart "$HY2_SVC" && ok "Restarted." ; press_enter ;;
+        5) if systemctl is-active --quiet "$HY2_SVC"; then
+               confirm "Stop?" && systemctl stop "$HY2_SVC" && ok "Stopped."
+           else
+               confirm "Start?" && systemctl start "$HY2_SVC" && ok "Started."
+           fi ; press_enter ;;
+        6) journalctl -fu "$HY2_SVC" ;;
+        7) confirm "Uninstall Hysteria2?" \
+               && bash <(curl -fsSL https://get.hy2.sh/) --remove \
+               && ok "Removed." ; press_enter ;;
+        0) break ;;
+    esac
+done

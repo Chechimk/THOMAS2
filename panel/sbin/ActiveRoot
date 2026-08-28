@@ -1,0 +1,39 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "ROOT PASSWORD AND ACCESS"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}CHANGE ROOT PASSWORD${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}ENABLE ROOT SSH LOGIN${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}DISABLE ROOT SSH LOGIN${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}ENABLE PASSWORD AUTHENTICATION${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}DISABLE PASSWORD AUTHENTICATION${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}VIEW SSH CONFIG${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) passwd root ;;
+        2) sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Root login enabled." ; press_enter ;;
+        3) warn "Ensure you have another admin user before disabling root login!"
+           confirm "Disable root login?" && \
+               sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \
+               systemctl restart ssh && ok "Root login disabled."
+           press_enter ;;
+        4) sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Password auth enabled." ; press_enter ;;
+        5) warn "Ensure you have SSH key auth before disabling passwords!"
+           confirm "Disable password authentication?" && \
+               sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+               systemctl restart ssh && ok "Password auth disabled."
+           press_enter ;;
+        6) grep -E "^(PermitRoot|Password|Port|Banner)" /etc/ssh/sshd_config 2>/dev/null
+           press_enter ;;
+        0) break ;;
+    esac
+done

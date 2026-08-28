@@ -1,0 +1,32 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+header "CHECK USER CONNECTIONS"
+line_sep
+printf "  ${BOLD}${CYAN}%-20s %-8s %-20s %-15s${RESET}\n" "USER" "CONNS" "IP" "PROTOCOL"
+line_sep
+
+# SSH connections via ss
+while IFS= read -r line; do
+    local_port=$(echo "$line" | awk '{print $5}' | cut -d: -f2)
+    remote_ip=$(echo "$line"  | awk '{print $6}' | cut -d: -f1)
+    pid=$(echo "$line" | grep -oP 'pid=\K[0-9]+')
+    [[ -n "$pid" ]] && user=$(ps -o user= -p "$pid" 2>/dev/null) || user="?"
+    printf "  %-20s %-8s %-20s %-15s\n" "$user" "1" "$remote_ip" "SSH"
+done < <(ss -tnp state established 2>/dev/null | grep -v "^State" | grep ":22")
+
+# Xray/V2Ray connections
+for svc in xray v2ray; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        count=$(ss -tnp 2>/dev/null | grep "$svc" | wc -l)
+        printf "  %-20s %-8s %-20s %-15s\n" "$svc" "$count" "multiple" "${svc^^}"
+    fi
+done
+
+echo ""
+line_sep
+printf "  ${DIM}Total SSH sessions: ${RESET}${WHITE}%s${RESET}\n" "$(who | wc -l)"
+printf "  ${DIM}Xray connections:   ${RESET}${WHITE}%s${RESET}\n" "$(ss -tnp 2>/dev/null | grep -c xray || echo 0)"
+line_sep
+press_enter

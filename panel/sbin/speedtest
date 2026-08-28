@@ -1,0 +1,22 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+header "SPEED TEST"
+info "Running speed test..."
+echo ""
+
+if command -v speedtest &>/dev/null; then
+    speedtest
+elif pip3 show speedtest-cli &>/dev/null 2>&1; then
+    speedtest-cli
+else
+    info "Installing speedtest-cli..."
+    pip3 install --quiet --break-system-packages speedtest-cli 2>/dev/null \
+        || apt-get install -y -qq speedtest-cli 2>/dev/null
+    speedtest-cli 2>/dev/null || speedtest 2>/dev/null || {
+        err "Speed test failed. Try: pip3 install speedtest-cli"
+    }
+fi
+
+press_enter

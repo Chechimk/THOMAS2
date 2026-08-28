@@ -1,0 +1,39 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "SSH BANNER ADMINISTRATOR"
+    line_sep
+    echo -e "  ${DIM}Banner file:${RESET} ${WHITE}/etc/issue.net${RESET}"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}EDIT BANNER (nano)${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}ENABLE BANNER IN SSH${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}DISABLE BANNER${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}SET DEFAULT PANEL BANNER${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}VIEW CURRENT BANNER${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) nano /etc/issue.net ;;
+        2) grep -q "^Banner" /etc/ssh/sshd_config \
+               && sed -i 's|^Banner.*|Banner /etc/issue.net|' /etc/ssh/sshd_config \
+               || echo "Banner /etc/issue.net" >> /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Banner enabled." ; press_enter ;;
+        3) sed -i '/^Banner/d' /etc/ssh/sshd_config
+           systemctl restart ssh && ok "Banner disabled." ; press_enter ;;
+        4) cat > /etc/issue.net <<'BANNER'
+╔══════════════════════════════════════════╗
+║          VPN PANEL — AUTHORIZED USE ONLY ║
+║          Unauthorized access is illegal  ║
+╚══════════════════════════════════════════╝
+BANNER
+           ok "Default banner set." ; press_enter ;;
+        5) cat /etc/issue.net 2>/dev/null || warn "No banner set."
+           press_enter ;;
+        0) break ;;
+    esac
+done

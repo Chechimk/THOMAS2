@@ -1,0 +1,18 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+header "WHATSAPP BOT"
+line_sep
+warn "WhatsApp bot requires a third-party library and phone number verification."
+echo ""
+echo -e "  ${CYAN}Recommended setup:${RESET}"
+echo -e "  1. Install Node.js:  ${WHITE}apt-get install -y nodejs npm${RESET}"
+echo -e "  2. Install baileys:  ${WHITE}npm install -g @whiskeysockets/baileys${RESET}"
+echo -e "  3. Or use a hosted WhatsApp API service (Twilio, CallMeBot, etc.)"
+echo ""
+echo -e "  ${DIM}For CallMeBot (no setup needed):${RESET}"
+echo -e "  Send to +34 644 59 92 96: ${WHITE}I allow callmebot to send me messages${RESET}"
+echo -e "  Then use: ${WHITE}curl 'https://api.callmebot.com/whatsapp.php?phone=YOUR_NUMBER&apikey=YOUR_KEY&text=test'${RESET}"
+line_sep
+press_enter

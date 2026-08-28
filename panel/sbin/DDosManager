@@ -1,0 +1,48 @@
+#!/bin/bash
+source /etc/panel/lib/common.sh
+require_root
+
+while true; do
+    header "DDOS PROTECTION"
+    line_sep
+    echo -e "  ${CYAN}[1]>${RESET}  ${WHITE}ENABLE BASIC DDOS PROTECTION${RESET}"
+    echo -e "  ${CYAN}[2]>${RESET}  ${WHITE}DISABLE DDOS PROTECTION${RESET}"
+    echo -e "  ${CYAN}[3]>${RESET}  ${WHITE}LIMIT CONNECTIONS PER IP${RESET}"
+    echo -e "  ${CYAN}[4]>${RESET}  ${WHITE}BLOCK IP${RESET}"
+    echo -e "  ${CYAN}[5]>${RESET}  ${WHITE}UNBLOCK IP${RESET}"
+    echo -e "  ${CYAN}[6]>${RESET}  ${WHITE}VIEW BLOCKED IPS${RESET}"
+    line_sep
+    echo -e "  ${BRED}[0]${RESET}  ${BOLD}${WHITE}Back${RESET}"
+    line_sep
+    echo ""
+    read -rp "  Enter an Option: " opt
+    case "$opt" in
+        1) # SYN flood, ICMP flood, connection rate limiting
+           iptables -A INPUT  -p tcp --syn -m limit --limit 1/s --limit-burst 4 -j ACCEPT
+           iptables -A INPUT  -p tcp --syn -j DROP
+           iptables -A INPUT  -p icmp -m limit --limit 1/s -j ACCEPT
+           iptables -A INPUT  -p icmp -j DROP
+           iptables -A INPUT  -m conntrack --ctstate INVALID -j DROP
+           ok "Basic DDoS protection enabled." ; press_enter ;;
+        2) iptables -D INPUT -p tcp --syn -m limit --limit 1/s --limit-burst 4 -j ACCEPT 2>/dev/null
+           iptables -D INPUT -p tcp --syn -j DROP 2>/dev/null
+           iptables -D INPUT -p icmp -m limit --limit 1/s -j ACCEPT 2>/dev/null
+           iptables -D INPUT -p icmp -j DROP 2>/dev/null
+           iptables -D INPUT -m conntrack --ctstate INVALID -j DROP 2>/dev/null
+           ok "DDoS protection disabled." ; press_enter ;;
+        3) read -rp "  ${CYAN}Max connections per IP: ${RESET}" max
+           read -rp "  ${CYAN}Target port (0=all): ${RESET}" prt
+           if [[ "$prt" == "0" ]]; then
+               iptables -A INPUT -p tcp -m connlimit --connlimit-above "$max" -j REJECT
+           else
+               iptables -A INPUT -p tcp --dport "$prt" -m connlimit --connlimit-above "$max" -j REJECT
+           fi
+           ok "Connection limit set to $max per IP." ; press_enter ;;
+        4) read -rp "  ${CYAN}IP to block: ${RESET}" ip
+           iptables -A INPUT -s "$ip" -j DROP && ok "IP $ip blocked." ; press_enter ;;
+        5) read -rp "  ${CYAN}IP to unblock: ${RESET}" ip
+           iptables -D INPUT -s "$ip" -j DROP 2>/dev/null && ok "IP $ip unblocked." ; press_enter ;;
+        6) iptables -L INPUT -n --line-numbers | grep DROP ; press_enter ;;
+        0) break ;;
+    esac
+done
